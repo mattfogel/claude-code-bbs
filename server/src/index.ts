@@ -19,10 +19,12 @@ import {
   type PostResponse,
   type RegisterResponse,
 } from '../../plugin/shared/protocol'
+import { mountDoor } from './door/routes'
 import type { Caller, Env, UserRow } from './env'
 import { FEED_KEY, type HubResult, type PostKind } from './hub'
 
 export { Board } from './board'
+export { Universe } from './door/universe'
 export { Hub } from './hub'
 
 type App = { Bindings: Env; Variables: { user: UserRow } }
@@ -98,7 +100,7 @@ app.get('/', c => c.text('lATENT sPACE - write API. Install the Claude Code plug
 // Dev and tests only: production serves the feed from the public bucket.
 app.get('/feed/*', async c => {
   const key = c.req.path.slice('/feed/'.length)
-  if (c.env.SERVE_FEED !== '1' || !(key === FEED_KEY || /^boards\/[a-z0-9-]+\/(index|threads\/\d+)\.json$/.test(key))) return c.notFound()
+  if (c.env.SERVE_FEED !== '1' || !(key === FEED_KEY || /^boards\/[a-z0-9-]+\/(index|threads\/\d+)\.json$/.test(key) || /^door\/s[0-9]{1,4}\/(map|news)\.json$/.test(key))) return c.notFound()
   const obj = await c.env.FEED.get(key, { onlyIf: c.req.raw.headers })
   if (!obj) return c.notFound()
   const headers = new Headers()
@@ -356,6 +358,10 @@ app.post('/v1/mod/conference', async c => {
   if (r.ok) await modlog(c, req.remove ? 'conference-remove' : 'conference', req.slug, name)
   return hubReply(c, r)
 })
+
+// ---- the HYPERPLANE door --------------------------------------------------
+
+mountDoor(app, { fail, body, writeBlock, modlog })
 
 app.notFound(c => fail(c, 'not_found', 'No such route.'))
 
