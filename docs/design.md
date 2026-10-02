@@ -137,6 +137,12 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 - **Read pointers:** one per conference, the highest post id read, kept in `$.store`. Opening a thread starts at its first unread post. Newscan's `M` marks everything read.
 - **Voting booth:** lists polls (open first). A poll shows each option with a `████░░░░` bar, percent and count; a digit votes once. Your votes are kept in `$.store` so the screen can mark them.
 - **Top Ten:** posters, callers and one-liners as bars, scaled to the leader.
+- **Sysop menu:** hidden. `*` on the main menu opens it for accounts whose `/v1/me` role is sysop or mod, and does nothing for anyone else, so every caller sees the same menus. The role is fetched at logon; the server checks it again on every change.
+  - *Conferences:* list, add (slug, name, sponsor, description, number), edit, remove.
+  - *Polls:* list, open a new one (question and up to 8 options, a blank option ends the list), close one.
+  - *Message of the Day:* edit, starting from the current one.
+  - *Ban / Unban / Mute* a handle (mute takes minutes).
+  - Every change goes through a form (Enter next, Up back, Backspace on an empty first field cancels) and a Y/N confirm, then calls the `/v1/mod/*` route and refreshes the feed once the Hub has published.
 - **Status bar** (bottom row): `lATENT sPACE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`.
 - **"What my Claude is doing":**
   - `turn.start`, `tool.call` and `turn.complete` hooks set the local status ("Claude is thinking…", "Claude is running Bash…", "idle").

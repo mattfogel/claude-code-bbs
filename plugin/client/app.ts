@@ -7,13 +7,14 @@ import type { Action, View } from '../types'
 import { fitPipe, sanitizeUserText, stripPipe, visibleLength } from '../shared/pipe'
 import { LIMITS, decodeStatus, describeStatus, isValidHandle, normalizeHandle } from '../shared/protocol'
 import { logo } from './logo'
+import { drawSysop, isSysop, isSysopScreen, pressSysop, type Confirm, type Form, type SysopScreen } from './sysop'
 import { drawMessages, isMessageScreen, openThreads, pressMessages, type Editor, type MessageScreen, type Reader } from './messages'
-import { LIGHTBAR, ago, center, clean, footer, frame, header, hotkey, pad, panel, plain, type Item } from './ui'
+import { LIGHTBAR, ago, center, clean, footer, frame, header, hotkey, pad, panel, panelItem, plain, type Item } from './ui'
 
 /** A key as the Client surface hands it (ClientKeyEvent). */
 export type ClientKey = { key: string; ctrl?: true; shift?: true; meta?: true }
 
-export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye' | MessageScreen
+export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye' | MessageScreen | SysopScreen
 
 type InputPurpose = 'handle' | 'location' | 'oneliner' | 'rumor'
 
@@ -44,6 +45,9 @@ export type AppState = {
   poll?: number
   /** When this call logged on (ms), for the time-left counter. */
   loggedAt?: number
+  /** The sysop form being filled in, and a pending Y/N. */
+  form?: Form
+  confirm?: Confirm
 }
 
 export const initialState = (seed = 0): AppState => ({ screen: 'matrix', sel: 0, input: null, apply: { handle: '', location: '' }, rumorSeed: seed, seen: 0, onBoard: false, list: 0, scan: 0 })
@@ -94,6 +98,7 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
   const s: AppState = { ...state, msg: undefined, seen: latestNotice(view) }
   if (s.input) return typing(s, key, view)
   if (isMessageScreen(s.screen)) return pressMessages(s, key, view, width)
+  if (isSysopScreen(s.screen)) return pressSysop(s, key, view)
 
   switch (s.screen) {
     case 'matrix': {
@@ -123,6 +128,8 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
       return { state: { ...s, screen: 'main', sel: 0 } }
 
     case 'main': {
+      // The hidden sysop key: does nothing for anyone else, so the menu looks the same to all.
+      if (key.key === '*') return isSysop(view) ? { state: { ...s, screen: 'sysop', list: 0 } } : { state: s }
       const hot = MAIN.findIndex(i => i.key === key.key.toLowerCase())
       if (hot >= 0) return enterMain(s, hot, view)
       if (isEnter(key)) return enterMain(s, s.sel, view)
@@ -260,12 +267,6 @@ function statusBar(view: View, width: number, now: number, base: string | undefi
   return [fitPipe(top, width), fitPipe(`|17 ${claude}`, width)]
 }
 
-/** One main-menu entry inside a panel, `width` cells, lit when selected. */
-function panelItem(item: Item, isSel: boolean, width: number): string {
-  if (isSel) return fitPipe(`${LIGHTBAR} ${item.key.toUpperCase()}  ${item.label}`, width) + '|16'
-  return fitPipe(` |01\u2590|17|15${item.key.toUpperCase()}|16|01\u258c |07${item.label}`, width)
-}
-
 function inputLine(label: string, value: string, max: number): string {
   return `|13${label}|08: |15${value}|13▄|08${'·'.repeat(Math.max(0, max - [...value].length))}`
 }
@@ -301,6 +302,7 @@ const MENU_NAMES: Partial<Record<Screen, string>> = {
   matrix: 'Matrix', apply: 'New User', logon: 'Logon', main: 'Main', oneliners: 'One-liners', rumors: 'Rumors',
   callers: 'Callers', who: "Who's On", stats: 'Stats', bases: 'Bases', editor: 'Editor', newscan: 'Newscan',
   vote: 'Voting', poll: 'Voting', top: 'Top Ten', goodbye: 'Goodbye',
+  sysop: 'Sysop', sysConfs: 'Sysop', sysPolls: 'Sysop', sysForm: 'Sysop',
 }
 
 function menuName(state: AppState, base: string | undefined): string {
@@ -311,6 +313,7 @@ function menuName(state: AppState, base: string | undefined): string {
 
 function screenLines(state: AppState, view: View, w: number, h: number, now: number): string[] {
   if (isMessageScreen(state.screen)) return drawMessages(state, view, w, h, now)
+  if (isSysopScreen(state.screen)) return drawSysop(state, view, w, h)
   const feed = view.feed
   switch (state.screen) {
     case 'matrix': {
