@@ -54,6 +54,8 @@ export const LIMITS = {
   pollOptionsMax: 8,
   /** Polls in hub.json: every open one, then the newest closed ones up to this. */
   feedPolls: 6,
+  /** Newest posts across all conferences in hub.json, so a client can spot replies to its handle. */
+  feedRecent: 30,
   topTen: 10,
 } as const
 
@@ -136,7 +138,12 @@ export type HubFeed = {
   conferences: FeedConference[]
   polls: FeedPoll[]
   top: TopTen
+  /** The newest posts board-wide, newest first: headers only, never bodies. */
+  recent: FeedRecentPost[]
 }
+
+/** A post's header as hub.json lists it in `recent`. `to` is a handle or "All". */
+export type FeedRecentPost = { slug: string; thread: number; id: number; handle: string; to: string; subject: string; ts: string }
 
 /** A message base. `n` is its number on the base-change screen. */
 export type FeedConference = {
