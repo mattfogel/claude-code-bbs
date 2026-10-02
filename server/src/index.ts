@@ -1,4 +1,4 @@
-// The lATeNt sPaCE write API. Every route but /register needs
+// The lATENT sPACE write API. Every route but /register needs
 // `Authorization: Bearer <secret>`; reads go to the R2 feed, not here.
 
 import { Hono, type Context } from 'hono'
@@ -76,7 +76,7 @@ app.onError((err, c) => {
   return fail(c, 'busy', 'ALL NODES BUSY - TRY AGAIN LATER')
 })
 
-app.get('/', c => c.text('lATeNt sPaCE - write API. Install the Claude Code plugin to call.\n'))
+app.get('/', c => c.text('lATENT sPACE - write API. Install the Claude Code plugin to call.\n'))
 
 // Dev and tests only: production serves the feed from the public bucket.
 app.get('/feed/:key', async c => {

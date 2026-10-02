@@ -218,7 +218,7 @@ function clock(now: number): string {
 
 function statusBar(view: View, width: number, now: number): string {
   const sep = '|05│|15'
-  const parts = ['lATeNt sPaCE']
+  const parts = ['lATENT sPACE']
   if (view.me?.node) parts.push(`Node ${view.me.node}`)
   if (view.me) parts.push(view.me.handle)
   parts.push(clock(now))
@@ -259,13 +259,13 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
   switch (state.screen) {
     case 'matrix': {
       const big = logo(w - 2)
-      const art = big ?? ['|05\u2591\u2592\u2593|13\u2588 |15l|13AT|15e|13N|15t |13s|15P|13a|15C|13E |13\u2588|05\u2593\u2592\u2591']
+      const art = big ?? ['|05\u2591\u2592\u2593|13\u2588 |13l|15ATENT |13s|15PACE |13\u2588|05\u2593\u2592\u2591']
       const items = MATRIX.map((item, i) => hotkey(item, i === state.sel)).join('  ')
       const online = feed ? `|08${feed.nodes.length} online · ${feed.stats.users} users · ${feed.stats.callsToday} calls today` : `|08${view.feedError ? 'carrier lost: ' + view.feedError : 'dialing...'}`
       const block = [
         ...art.map(l => center(l, w)),
         '',
-        ...(big ? [center('|08-=|07[ |13l|15AT|13e|15N|13t |15s|13P|15a|13C|15E |07]|08=-', w)] : []),
+        ...(big ? [center('|08-=|07[ |13l|15ATENT |13s|15PACE |07]|08=-', w)] : []),
         center(`|07${feed?.motd ? clean(feed.motd, LIMITS.motdMax) : 'a board for the hours Claude is busy'}`, w),
         '',
         center(items, w),
@@ -300,7 +300,7 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
     }
 
     case 'logon': {
-      const lines = [`|07Logging on to |13lATeNt sPaCE|07 as |15${view.me?.handle ?? '?'}|07, node |15${view.me?.node ?? '?'}|07.`, '']
+      const lines = [`|07Logging on to |13lATENT sPACE|07 as |15${view.me?.handle ?? '?'}|07, node |15${view.me?.node ?? '?'}|07.`, '']
       const rumors = feed?.rumors ?? []
       if (rumors.length) {
         lines.push('|05▒|13 Rumor of the day', `  |07"${clean(rumors[state.rumorSeed % rumors.length].text, LIMITS.rumorMax)}|07"`, '')
@@ -391,7 +391,7 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
     case 'goodbye':
       return [
         ...Array.from({ length: Math.max(0, Math.floor(h / 2) - 3) }, () => ''),
-        center('|07Thanks for calling |13lATeNt sPaCE|07.', w),
+        center('|07Thanks for calling |13lATENT sPACE|07.', w),
         '',
         center('|08+++', w),
         center('|15NO CARRIER', w),

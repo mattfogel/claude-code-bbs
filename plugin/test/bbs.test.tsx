@@ -7,7 +7,7 @@ const FEED = 'https://feed.mattfogel.com/hub.json'
 const NOW = Date.parse('2026-10-02T18:00:00Z')
 
 const paneProps = (columns = 80, rows = 24) => ({
-  title: 'lATeNt sPaCE',
+  title: 'lATENT sPACE',
   isFocused: true,
   bodyColumns: columns,
   placement: 'dock' as const,
@@ -107,7 +107,7 @@ const screen = async (ui: { drawn: (s?: { in?: string }) => Promise<unknown> }) 
   return out.join('')
 }
 
-describe('lATeNt sPaCE', () => {
+describe('lATENT sPACE', () => {
   test('a new caller applies, logs on and posts a one-liner', async ($, on) => {
     const clock = engine(on)
     const board = fakeBoard(on)

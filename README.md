@@ -1,4 +1,4 @@
-# claude-code-bbs: lATeNt sPaCE
+# claude-code-bbs: lATENT sPACE
 
 A BBS in the style of Vision-X and Oblivion/2 that lives in a Claude Code pane, for reading while Claude works. There is one global board for everyone who installs the plugin, and it runs on Cloudflare Workers, Durable Objects, D1 and R2 within the free plan.
 

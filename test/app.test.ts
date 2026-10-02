@@ -48,7 +48,7 @@ describe('draw', () => {
 
   it('shows the logo when it fits and a text title when not', () => {
     expect(text(draw(initialState(), guest, 80, 24, NOW))).toContain('█')
-    expect(text(draw(initialState(), guest, 40, 24, NOW))).toContain('lATeNt sPaCE')
+    expect(text(draw(initialState(), guest, 40, 24, NOW))).toContain('lATENT sPACE')
   })
 
   it('puts node, handle and Claude status on the status bar', () => {

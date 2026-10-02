@@ -1,4 +1,4 @@
-// lATeNt sPaCE: a BBS in a pane. This module owns everything with `$`: the
+// lATENT sPACE: a BBS in a pane. This module owns everything with `$`: the
 // /bbs command, the pane, polling the public feed, the write API, the account
 // in $.store and the coarse "what my Claude is doing" status. The screen
 // itself is client/term.tsx, which posts Actions here.
@@ -206,7 +206,7 @@ async function mergeOwnPost($: Dollar, kind: 'oneliner' | 'rumor', id: number, t
 
 async function openPane($: Dollar) {
   await update($, isOpen, () => true)
-  await $.ui.open({ id: PANE, title: 'lATeNt sPaCE', focus: true, rows: 24, columns: 80 })
+  await $.ui.open({ id: PANE, title: 'lATENT sPACE', focus: true, rows: 24, columns: 80 })
   void poll($, true)
 }
 
@@ -217,7 +217,7 @@ export const register: Register = (on, options) => {
   // ---- hooks --------------------------------------------------------------
 
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'bbs', description: 'Call lATeNt sPaCE, the BBS in a pane' })
+    await $.command.register({ name: 'bbs', description: 'Call lATENT sPACE, the BBS in a pane' })
     const acct = await account($)
     await update($, view, (v): View => ({
       ...v,
@@ -232,7 +232,7 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'bbs' }, async $ => {
     await openPane($)
-    return { text: 'Dialing lATeNt sPaCE... (ctrl+x tab focuses the pane, Esc hands the keys back)' }
+    return { text: 'Dialing lATENT sPACE... (ctrl+x tab focuses the pane, Esc hands the keys back)' }
   })
 
   on('ui.close', async ($, e, next) => {
@@ -254,7 +254,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     if (e.surface !== 'terminal' && e.surface !== 'desktop') {
       const { Text } = $.ui.resolve(e)
-      return <Text>lATeNt sPaCE needs a terminal (or the desktop app) to call.</Text>
+      return <Text>lATENT sPACE needs a terminal (or the desktop app) to call.</Text>
     }
     const { Box, Client } = $.ui.resolve(e)
     const v = await read($, view)

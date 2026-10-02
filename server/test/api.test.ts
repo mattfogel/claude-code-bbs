@@ -165,9 +165,9 @@ describe('moderation', () => {
     expect(banned.status).toBe(403)
     expect((await api('/v1/mod/ban', { secret: lamer, body: { handle: 'SysOp' } })).status).toBe(403)
 
-    expect((await api('/v1/mod/motd', { secret: sysop, body: { text: '|13welcome to |15lATeNt sPaCE' } })).status).toBe(200)
+    expect((await api('/v1/mod/motd', { secret: sysop, body: { text: '|13welcome to |15lATENT sPACE' } })).status).toBe(200)
     const feed = await publishedFeed()
-    expect(feed.motd).toBe('|13welcome to |15lATeNt sPaCE')
+    expect(feed.motd).toBe('|13welcome to |15lATENT sPACE')
     expect(feed.oneliners.some(o => o.text.includes('warez'))).toBe(false)
 
     const log = await env.DB.prepare('SELECT action FROM modlog ORDER BY id').all<{ action: string }>()

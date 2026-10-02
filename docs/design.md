@@ -1,4 +1,4 @@
-# lATeNt sPaCE — design
+# lATENT sPACE — design
 
 A Vision-X / Oblivion/2-style BBS that lives in a Claude Code pane. There is one global board for everyone who installs the plugin, hosted on Cloudflare and designed to stay within the **Workers Free plan**.
 
@@ -69,7 +69,7 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
   "v": 1,
   "seq": 18234,                 // monotonic, bumped on every change
   "generatedAt": "2026-10-02T18:04:11Z",
-  "motd": "|08[|15lATeNt sPaCE|08] |07welcome back, |11%UN|07.",
+  "motd": "|08[|15lATENT sPACE|08] |07welcome back, |11%UN|07.",
   "oneliners":  [{ "id": "…", "handle": "mattf", "text": "…", "ts": "…" }],   // last 15
   "rumors":     [{ "id": "…", "text": "…", "ts": "…" }],                      // last 50; clients pick one at random
   "lastCallers":[{ "handle": "…", "location": "…", "ts": "…", "node": 3 }],   // last 10
@@ -123,7 +123,7 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 - **First run:** matrix screen → `[N]ew User` → handle/location prompts → proof of work ("Negotiating carrier…") → secret saved to `$.store`.
 - **Returning user:** matrix → Login (automatic, using the stored secret) → logon sequence (rumor of the day, last callers, one-liners) → Main Menu.
 - **Main menu (phase 1):** `[O]ne-liners  [R]umors  [L]ast Callers  [W]ho's Online  [S]tats  [G]oodbye`. Arrow-key lightbar plus single-key hotkeys.
-- **Status bar** (bottom row): `lATeNt sPaCE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`.
+- **Status bar** (bottom row): `lATENT sPACE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`.
 - **"What my Claude is doing":**
   - `turn.start`, `tool.call` and `turn.complete` hooks set the local status ("Claude is thinking…", "Claude is running Bash…", "idle").
   - The status bar shows it, and the presence update sends it, throttled.
@@ -216,4 +216,4 @@ Private mail (Mailbox Durable Objects, fetched through the Worker since mail is 
 - The exact wording of `Cache-Control` and the R2 Class B billing for cache hits needs measuring once the feed is deployed.
 - The Client module and Text color limits come from an early-access API (Claude Code 2.1.287). Re-check `claude-code.d.ts` after upgrades.
 - Whether hashing is faster in a pure-JS SHA-256 than with `crypto.subtle` per digest in the mod environment. If it is, the PoW could go back to 18 bits.
-- Chosen color theme for lATeNt sPaCE: the default proposal is the purple/magenta gradient `|05 |13 |15` with a `|08` frame.
+- Chosen color theme for lATENT sPACE: the default proposal is the purple/magenta gradient `|05 |13 |15` with a `|08` frame.

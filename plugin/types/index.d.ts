@@ -1,4 +1,4 @@
-// lATeNt sPaCE: the values the hooks module keeps in $.state, and the data
+// lATENT sPACE: the values the hooks module keeps in $.state, and the data
 // the Client module (client/term.tsx) receives as props and posts back.
 
 export type FeedOneliner = { id: number; handle: string; text: string; ts: string }
