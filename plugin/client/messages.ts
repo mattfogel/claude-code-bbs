@@ -23,7 +23,10 @@ export type Editor = {
   back: Screen
 }
 
-export type Reader = { slug: string; thread: number; scroll: number; fromScan: boolean }
+/** `confirm`: a pending Y/N to report the message on screen, or (sysops) delete it. */
+export type Reader = { slug: string; thread: number; scroll: number; fromScan: boolean; confirm?: 'report' | 'delete' }
+
+const canModerate = (view: View) => view.me?.role === 'sysop' || view.me?.role === 'mod'
 
 export const MESSAGE_SCREENS = ['bases', 'threads', 'read', 'editor', 'newscan', 'vote', 'poll', 'top'] as const
 export type MessageScreen = (typeof MESSAGE_SCREENS)[number]
@@ -104,6 +107,12 @@ export function pressMessages(s: AppState, key: ClientKey, view: View, width: nu
       const at = loaded ? t.posts.findIndex(p => p.id === t.focus) : -1
       const post = loaded ? t.posts[at] : undefined
       const k = lower(key)
+      if (r.confirm) {
+        const unconfirmed = { ...s, reader: { ...r, confirm: undefined } }
+        if (k !== 'y' || !post) return { state: { ...unconfirmed, msg: 'Cancelled.' } }
+        if (r.confirm === 'report') return { state: { ...unconfirmed, msg: 'Reporting...' }, action: { type: 'report', conference: r.slug, id: post.id } }
+        return { state: { ...unconfirmed, msg: 'Deleting...' }, action: { type: 'sysop', op: { kind: 'deletePost', conference: r.slug, id: post.id, thread: r.thread } } }
+      }
       if (k === 'q' || key.key === 'backspace') return r.fromScan ? { state: home(s) } : openThreads(s, view, r.slug)
       if (k === 't') return openThreads(s, view, r.slug)
       if (key.key === 'down') return { state: { ...s, reader: { ...r, scroll: r.scroll + 1 } } }
@@ -122,6 +131,8 @@ export function pressMessages(s: AppState, key: ClientKey, view: View, width: nu
         if (!prev) return { state: { ...s, msg: 'First message.' } }
         return { state: { ...s, reader: { ...r, scroll: 0 } }, action: { type: 'read', slug: r.slug, thread: r.thread, post: prev.id } }
       }
+      if (k === '!' && post) return { state: { ...s, reader: { ...r, confirm: 'report' } } }
+      if (k === 'd' && post && canModerate(view)) return { state: { ...s, reader: { ...r, confirm: 'delete' } } }
       if (k === 'r' && post) {
         return newEditor(s, view, { slug: r.slug, step: 'body', subject: replySubject(post.subject), to: post.handle, replyTo: post.id, back: 'read' })
       }
@@ -386,7 +397,12 @@ function drawReader(s: AppState, view: View, w: number, h: number): string[] {
   const scroll = Math.min(r.scroll, Math.max(0, body.length - room))
   const shown = body.slice(scroll, scroll + room)
   const more = body.length > scroll + room ? ` |08↓ ${body.length - scroll - room} more` : ''
-  return [...lines, ...pad(shown, room), footer(`|08[|15N|08]|07ext |08[|15P|08]|07rev |08[|15R|08]|07eply |08[|15T|08]|07hreads |08[|15Q|08]|07uit${more}`, w)]
+  if (r.confirm) {
+    const ask = r.confirm === 'report' ? `Report message #${post.id} to the SysOp?` : `Delete message #${post.id}?`
+    return [...lines, ...pad(shown, room), fitPipe(`|14${ask} |15(Y/N)`, w)]
+  }
+  const del = canModerate(view) ? ' |08[|15D|08]|07el' : ''
+  return [...lines, ...pad(shown, room), footer(`|08[|15N|08]|07ext |08[|15P|08]|07rev |08[|15R|08]|07eply |08[|15T|08]|07hreads |08[|15!|08]|07Report${del} |08[|15Q|08]|07uit${more}`, w)]
 }
 
 function drawEditor(s: AppState, view: View, w: number, h: number): string[] {

@@ -261,7 +261,13 @@ function statusBar(view: View, width: number, now: number, base: string | undefi
   if (base) parts.push(base)
   if (frame.minsLeft !== undefined) parts.push(`${frame.minsLeft} mins`)
   parts.push(clock(now))
-  const claude = view.busy ? '|14ALL NODES BUSY - TRY AGAIN LATER' : `|09Claude |15${view.claude}`
+  const claude = view.alert
+    ? `|30|00 *** ${view.alert} *** |17`
+    : view.busy
+      ? '|14ALL NODES BUSY - TRY AGAIN LATER'
+      : view.feedError
+        ? `|12NO CARRIER |08(${plain(view.feedError, 30)}) |09Claude |15${view.claude}`
+        : `|09Claude |15${view.claude}`
   const top = `|17|15 ${parts.join(sep)}`
   if (rows < 2) return [fitPipe(`${top}${sep}${claude}`, width)]
   return [fitPipe(top, width), fitPipe(`|17 ${claude}`, width)]

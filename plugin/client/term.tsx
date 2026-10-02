@@ -4,7 +4,7 @@
 
 import type { ClientModule } from 'claude-code'
 
-import type { View } from '../types'
+import type { Outbox, View } from '../types'
 import { parsePipe, type Cell } from '../shared/pipe'
 import { draw, initialState, press, type AppState } from './app'
 import { cps, inkCount, reveal } from './reveal'
@@ -12,8 +12,11 @@ import { THEME } from './theme'
 
 /** `baud`: the draw-in speed, 0 for none. */
 export type TermProps = { view: View; columns: number; rows: number; baud?: number }
-/** `revealKey` names the screen being drawn in; `revealAt` is when it started (0: shown whole). */
-type Local = { app: AppState; now: number; revealKey: string; revealAt: number }
+/**
+ * `revealKey` names the screen being drawn in; `revealAt` is when it started (0: shown whole).
+ * `outbox` is shared by every copy of the state (setState spreads keep the reference).
+ */
+type Local = { app: AppState; now: number; revealKey: string; revealAt: number; outbox: Outbox }
 
 const FRAME_MS = 33
 
@@ -43,7 +46,8 @@ const Term: ClientModule<TermProps, Local> = (props, surface) => {
   latest = props
   let local = surface.state
   if (!local) {
-    local = { app: initialState(Math.floor(Math.random() * 1e6)), now: Date.now(), revealKey: '', revealAt: 0 }
+    const iid = Math.random().toString(36).slice(2, 10)
+    local = { app: initialState(Math.floor(Math.random() * 1e6)), now: Date.now(), revealKey: '', revealAt: 0, outbox: { type: 'batch', iid, seq: 0, actions: [] } }
     surface.setState(local)
     surface.every(FRAME_MS, () => {
       const cur = surface.state
@@ -60,9 +64,18 @@ const Term: ClientModule<TermProps, Local> = (props, surface) => {
       if (drawingIn) return surface.setState({ ...cur, revealAt: 0 })
       const step = press(cur.app, key, latest.view, Math.random, surface.columns || latest.columns, Date.now())
       surface.setState({ ...cur, app: step.state, now: Date.now() })
-      if (step.action) surface.post(step.action)
+      if (step.action) {
+        // A later post in the same frame replaces an undelivered one, so every post carries all
+        // the actions not yet acknowledged; the hooks module skips the ones it already ran.
+        const box = cur.outbox
+        box.actions.push({ seq: ++box.seq, action: step.action })
+        surface.post({ type: 'batch', iid: box.iid, seq: box.seq, actions: box.actions })
+      }
     })
   }
+
+  const acked = props.view.acks?.[local.outbox.iid] ?? 0
+  while (local.outbox.actions.length && local.outbox.actions[0].seq <= acked) local.outbox.actions.shift()
 
   const columns = surface.columns || props.columns
   const rows = surface.rows || props.rows

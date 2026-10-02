@@ -124,6 +124,8 @@ function describe(op: SysopOp): string {
       return op.text ? 'Set the message of the day?' : 'Clear the message of the day?'
     case 'user':
       return op.action === 'mute' ? `Mute ${op.handle} for ${op.minutes} min?` : `${op.action === 'ban' ? 'Ban' : 'Unban'} ${op.handle}?${op.action === 'ban' ? ' Their posts are hidden' : ''}`
+    case 'deletePost':
+      return `Delete message #${op.id}?`
   }
 }
 

@@ -9,13 +9,20 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Account, Action, BoardIndex, BoardThreadFile, Feed, Presence, ScanItem, SysopOp, ThreadView, View } from '../types'
+import type { Account, Action, BoardIndex, Outbox, BoardThreadFile, Feed, Presence, ScanItem, SysopOp, ThreadView, View } from '../types'
 import { LIMITS, boardIndexKey, boardThreadKey, describeStatus, encodeStatus, leadingZeroBits, powInput, type ClaudeStatus } from '../shared/protocol'
+import { sanitizeUserText, stripPipe } from '../shared/pipe'
 
 type Dollar = EngineInterface
 
 const PANE = 'latent-space'
 const POLL_MS = 10_000
+/** The poll interval while the pane is open but does not have the keys. */
+const UNFOCUSED_POLL_MS = 30_000
+/** How often the closed pane checks hub.json for messages addressed to this caller. */
+const PAGER_MS = 120_000
+/** How long a turn runs before the prompt hint mentions the board. */
+const NUDGE_AFTER_MS = 30_000
 const PRESENCE_MIN_GAP_MS = 120_000
 const PRESENCE_KEEPALIVE_MS = 300_000
 const POW_CHUNK = 2_000
@@ -31,9 +38,25 @@ const isOpen = atom({ plugin: 'latent-space', key: 'isOpen' } as const, false)
 const etags = atom({ plugin: 'latent-space', key: 'etags' } as const, {} as Record<string, string>)
 const threads = atom({ plugin: 'latent-space', key: 'threads' } as const, {} as Record<string, BoardThreadFile>)
 const presence = atom({ plugin: 'latent-space', key: 'presence' } as const, { sent: '', sentAt: 0, wanted: 'idle' } as Presence)
+const nudge = atom({ plugin: 'latent-space', key: 'nudge' } as const, '')
 
-/** Defaults, overridden at session start by LATENT_SPACE_API_URL, LATENT_SPACE_FEED_URL and LATENT_SPACE_MODEM (a baud rate, or off). */
-const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800 }
+/**
+ * Defaults, overridden at session start by LATENT_SPACE_API_URL, LATENT_SPACE_FEED_URL, LATENT_SPACE_MODEM
+ * (a baud rate, or off), LATENT_SPACE_PAGER=off (no reply alerts while the pane is closed) and
+ * LATENT_SPACE_NUDGE=off (no board line in the prompt hint during long turns).
+ */
+const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800, pager: true, nudge: true }
+
+// Bookkeeping that may start over on a hot reload without harm.
+/** Main-loop tool calls still running, so parallel calls don't report "thinking" early. */
+let toolsInFlight = 0
+let lastPollAt = 0
+/** The main-loop turn running now, for the waiting-room nudge. */
+let turnNow: string | undefined
+/** The status line last pinned, so polls don't re-pin the same text. */
+let pinned: string | undefined
+/** The highest action seq run per screen instance; mirrored in view.acks, which outlives a reload. */
+const acked = new Map<string, number>()
 
 /** A file next to hub.json on the feed (boards/<slug>/...). */
 const feedFile = (key: string) => config.feedUrl.replace(/[^/]*$/, '') + key
@@ -58,7 +81,7 @@ async function api($: Dollar, path: string, body?: unknown, method: 'GET' | 'POS
   try {
     res = await $.http.fetch(`${config.apiUrl}${path}`, method === 'GET' ? { headers } : { method, headers, body: JSON.stringify(body ?? {}) })
   } catch {
-    await update($, view, (v): View => ({ ...v, busy: true }))
+    await update($, view, (v): View => ({ ...v, busy: true, busyNet: true }))
     return { ok: false, code: 'busy', message: 'ALL NODES BUSY - TRY AGAIN LATER' }
   }
   let data: Record<string, unknown> = {}
@@ -69,17 +92,20 @@ async function api($: Dollar, path: string, body?: unknown, method: 'GET' | 'POS
   }
   const err = data.error as { code?: string; message?: string } | undefined
   if (res.ok) {
-    await update($, view, v => (v.busy ? { ...v, busy: false } : v))
+    await update($, view, v => (v.busy ? { ...v, busy: false, busyNet: undefined } : v))
     return { ok: true, data }
   }
   if (res.status >= 500 || !err || err.code === 'busy') {
-    await update($, view, (v): View => ({ ...v, busy: true }))
+    await update($, view, (v): View => ({ ...v, busy: true, busyNet: undefined }))
     return { ok: false, code: 'busy', message: 'ALL NODES BUSY - TRY AGAIN LATER' }
   }
   if (err.code === 'unauthorized') {
-    // The account is gone server-side: start over as a new user.
+    // The account is gone server-side: start over as a new user, but keep the old
+    // secret, so a server-side mistake never costs anyone their handle for good.
+    if (acct) await $.store.set('accountRevoked', { ...acct, revokedAt: await $.clock.now() })
     await $.store.delete('account')
     await update($, view, (v): View => ({ ...v, phase: 'new', me: undefined }))
+    return { ok: false, code: 'unauthorized', message: 'The board no longer knows this account. Apply again; the old key is kept as accountRevoked.' }
   }
   return { ok: false, code: String(err.code), message: String(err.message ?? 'Failed.') }
 }
@@ -111,23 +137,116 @@ async function fetchJson<T>($: Dollar, url: string, force: boolean): Promise<Fet
   return { status: 'fresh', data }
 }
 
-async function poll($: Dollar, force = false) {
-  if (!force && !(await read($, isOpen))) return
+async function paneFocused($: Dollar): Promise<boolean> {
+  return (await $.ui.panes()).some(p => p.id === PANE && p.isFocused)
+}
+
+/** Fetches hub.json and takes it into the view; answers whether the fetch reached the feed. */
+async function fetchFeed($: Dollar, force: boolean): Promise<boolean> {
   const r = await fetchJson<Feed>($, config.feedUrl, force)
   if (r.status === 'error' || r.status === 'missing') {
     await update($, view, (v): View => ({ ...v, feedError: r.status === 'error' ? r.message : 'no feed' }))
-  } else if (r.status === 'fresh') {
-    const feed = r.data
-    if (feed && typeof feed.seq === 'number' && Array.isArray(feed.oneliners)) {
-      await update($, view, v => (v.feed && v.feed.seq > feed.seq ? { ...v, feedError: undefined } : { ...v, feed, feedError: undefined }))
+    return false
+  }
+  const feed = r.status === 'fresh' ? r.data : undefined
+  const ok = !feed || (typeof feed.seq === 'number' && Array.isArray(feed.oneliners))
+  await update($, view, (v): View => {
+    // A network-caused busy ends once the network answers again; a server busy waits for a write.
+    const w = v.busyNet ? { ...v, busy: false, busyNet: undefined } : v
+    if (!feed || !ok || (w.feed && w.feed.seq > feed.seq)) return w.feedError || w !== v ? { ...w, feedError: undefined } : w
+    return { ...w, feed, feedError: undefined }
+  })
+  if (feed && ok) await checkMail($)
+  return true
+}
+
+async function poll($: Dollar, force = false) {
+  if (!force && !(await read($, isOpen))) return
+  const now = await $.clock.now()
+  if (!force) {
+    const focused = await paneFocused($)
+    if (!focused) {
+      const v = await read($, view)
+      if (v.alert) await update($, view, (w): View => ({ ...w, alert: undefined }))
+      if (now - lastPollAt < UNFOCUSED_POLL_MS - 1_000) return
     }
   }
-  if (force) return
-  // Keep what is on screen current too: cheap, since an unchanged file is a 304.
+  lastPollAt = now
+  if (!(await fetchFeed($, force)) || force) return
+  // Keep what is on screen current too, but only fetch a file the feed says has changed.
   const v = await read($, view)
-  if (v.board) await loadBoard($, v.board.slug, false)
-  if (v.thread) await loadThread($, v.thread.slug, v.thread.id, v.thread.focus, false)
+  const conf = v.board && v.feed?.conferences?.find(c => c.slug === v.board?.slug)
+  if (v.board && (!v.board.index || !conf || conf.lastPostId > Math.max(0, ...v.board.index.threads.map(t => t.lastPostId)))) {
+    await loadBoard($, v.board.slug, false)
+  }
+  if (v.thread) {
+    const row = v.board?.slug === v.thread.slug ? (await read($, view)).board?.index?.threads.find(t => t.id === v.thread?.id) : undefined
+    const newest = Math.max(0, ...v.thread.posts.map(p => p.id))
+    if (!row || row.lastPostId > newest) await loadThread($, v.thread.slug, v.thread.id, v.thread.focus, false)
+  }
 }
+
+/** While the pane is closed: hub.json now and then, for replies addressed to this caller. */
+async function pager($: Dollar) {
+  if (!config.pager || (await read($, isOpen)) || !(await account($))) return
+  await fetchFeed($, false)
+}
+
+const oneLine = (text: string, max: number) => stripPipe(sanitizeUserText(text, max))
+
+/** Posts addressed to this caller (not by them) past their read pointers, newest first. */
+function forMe(v: View) {
+  const me = v.me?.handle.toLowerCase()
+  if (!me || !v.feed?.recent) return []
+  const live = new Set((v.feed.conferences ?? []).map(c => c.slug))
+  return v.feed.recent.filter(p => live.has(p.slug) && p.to.toLowerCase() === me && p.handle.toLowerCase() !== me && p.id > (v.lastRead?.[p.slug] ?? 0))
+}
+
+/** Pins the unread count under the prompt and toasts replies not toasted before. */
+async function checkMail($: Dollar) {
+  const v = await read($, view)
+  const mine = forMe(v)
+  const line = mine.length ? `lATENT sPACE: ${mine.length} message${mine.length === 1 ? '' : 's'} for you${(await read($, isOpen)) ? '' : ' · /bbs'}` : undefined
+  if (line !== pinned) {
+    pinned = line
+    $.ui.status(line)
+  }
+  const told = ((await $.store.get('told')) ?? {}) as Record<string, number>
+  const fresh = mine.filter(p => p.id > (told[p.slug] ?? 0))
+  if (!fresh.length) return
+  const next = { ...told }
+  for (const p of fresh) next[p.slug] = Math.max(next[p.slug] ?? 0, p.id)
+  await $.store.set('told', next)
+  const p = fresh[0]
+  $.ui.toast(
+    fresh.length === 1
+      ? `${oneLine(p.handle, LIMITS.handleMax)} replied to you on lATENT sPACE: ${oneLine(p.subject, LIMITS.subjectMax)}`
+      : `${fresh.length} new messages for you on lATENT sPACE`,
+    { timeoutMs: 8_000 },
+  )
+}
+
+/** Once a turn has run a while with the board out of sight, the prompt hint mentions it. */
+async function nudgeCheck($: Dollar, turnId: string) {
+  if (!config.nudge || turnNow !== turnId || !(await account($))) return
+  if ((await $.ui.panes()).some(p => p.id === PANE && p.isShown)) return
+  if (!(await read($, isOpen))) await fetchFeed($, false)
+  const v = await read($, view)
+  if (turnNow !== turnId || !v.feed) return
+  const online = v.feed.nodes.length
+  const unread = (v.feed.recent ?? []).filter(p => p.handle.toLowerCase() !== v.me?.handle.toLowerCase() && p.id > (v.lastRead?.[p.slug] ?? 0)).length
+  const text = `/bbs: ${online} online${unread ? `, ${unread}${unread >= LIMITS.feedRecent ? '+' : ''} new` : ''}`
+  await update($, nudge, () => text)
+}
+
+/** The pane holds the keys and Claude wants them back: say so on the board and in a toast. */
+async function needsYou($: Dollar, alert: string, toast: string) {
+  if (!(await read($, isOpen)) || !(await paneFocused($))) return
+  await update($, view, (v): View => ({ ...v, alert }))
+  $.ui.toast(toast, { timeoutMs: 10_000 })
+}
+
+const duration = (ms: number) => (ms >= 60_000 ? `${Math.floor(ms / 60_000)}m${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s` : `${Math.round(ms / 1000)}s`)
 
 // ---- message bases --------------------------------------------------------
 
@@ -193,6 +312,7 @@ async function markRead($: Dollar, slug: string, postId: number) {
   const lastRead = { ...v.lastRead, [slug]: postId }
   await $.store.set('lastRead', lastRead)
   await update($, view, (w): View => ({ ...w, lastRead: { ...w.lastRead, [slug]: Math.max(w.lastRead?.[slug] ?? 0, postId) } }))
+  await checkMail($)
 }
 
 /** Every thread with posts newer than this account's read pointers. */
@@ -201,20 +321,22 @@ async function newscan($: Dollar) {
   await poll($, true)
   const v = await read($, view)
   const items: ScanItem[] = []
-  for (const c of v.feed?.conferences ?? []) {
+  const confs = (v.feed?.conferences ?? []).filter(c => c.lastPostId > (v.lastRead?.[c.slug] ?? 0))
+  const indexes = await Promise.all(confs.map(c => fetchJson<BoardIndex>($, feedFile(boardIndexKey(c.slug)), true)))
+  confs.forEach((c, i) => {
+    const r = indexes[i]
+    if (r.status !== 'fresh') return
     const seen = v.lastRead?.[c.slug] ?? 0
-    if (c.lastPostId <= seen) continue
-    const r = await fetchJson<BoardIndex>($, feedFile(boardIndexKey(c.slug)), true)
-    if (r.status !== 'fresh') continue
     for (const t of r.data.threads.filter(t => t.lastPostId > seen).reverse()) {
       if (items.length >= NEWSCAN_THREADS) break
       items.push({ slug: c.slug, conference: c.name, thread: t.id, subject: t.subject, unread: 0 })
     }
-  }
-  for (const item of items) {
-    const r = await fetchJson<BoardThreadFile>($, feedFile(boardThreadKey(item.slug, item.thread)), true)
+  })
+  const files = await Promise.all(items.map(item => fetchJson<BoardThreadFile>($, feedFile(boardThreadKey(item.slug, item.thread)), true)))
+  items.forEach((item, i) => {
+    const r = files[i]
     if (r.status === 'fresh') item.unread = r.data.posts.filter(p => p.id > (v.lastRead?.[item.slug] ?? 0)).length
-  }
+  })
   await update($, view, (w): View => ({ ...w, newscan: { scanning: false, items: items.filter(i => i.unread !== 0) } }))
 }
 
@@ -224,6 +346,7 @@ async function markAllRead($: Dollar) {
   for (const c of v.feed?.conferences ?? []) lastRead[c.slug] = Math.max(lastRead[c.slug] ?? 0, c.lastPostId)
   await $.store.set('lastRead', lastRead)
   await update($, view, (w): View => ({ ...w, lastRead, newscan: w.newscan && { scanning: false, items: [] } }))
+  await checkMail($)
   await notify($, 'All messages marked read.')
 }
 
@@ -279,6 +402,14 @@ async function sysop($: Dollar, op: SysopOp) {
     case 'user':
       r = await api($, `/v1/mod/${op.action}`, { handle: op.handle, minutes: op.minutes })
       done = op.action === 'mute' ? `${op.handle} muted for ${op.minutes ?? 60} min.` : `${op.handle} ${op.action === 'ban' ? 'banned' : 'unbanned'}.`
+      break
+    case 'deletePost':
+      r = await api($, '/v1/mod/delete', { kind: 'post', conference: op.conference, id: op.id })
+      done = `Message #${op.id} deleted.`
+      if (r.ok) {
+        $.clock.after(PUBLISH_LAG_MS, () => void refreshAfterPost($, op.conference, op.thread))
+        $.clock.after(PUBLISH_LAG_MS * 2, () => void refreshAfterPost($, op.conference, op.thread))
+      }
       break
   }
   if (!r.ok) return void (await notify($, r.message, true))
@@ -373,7 +504,7 @@ async function act($: Dollar, action: Action) {
       const role = me.ok && (me.data.role === 'sysop' || me.data.role === 'mod') ? me.data.role : 'user'
       await update($, view, (v): View => ({ ...v, me: v.me && { ...v.me, role } }))
       const sentAt = await $.clock.now()
-        await update($, presence, (q): Presence => ({ ...q, sent: 'idle', sentAt }))
+      await update($, presence, (q): Presence => ({ ...q, sent: 'idle', sentAt }))
       await poll($, true)
       return
     }
@@ -418,7 +549,29 @@ async function act($: Dollar, action: Action) {
     case 'sysop':
       await sysop($, action.op)
       return
+    case 'report': {
+      const r = await api($, '/v1/report', { kind: 'post', conference: action.conference, id: action.id })
+      await notify($, r.ok ? 'Reported to the SysOp. Thanks.' : r.message, !r.ok)
+      return
+    }
   }
+}
+
+/** Runs the actions of an outbox not run before, in order. */
+async function runOutbox($: Dollar, box: Outbox) {
+  if (typeof box.iid !== 'string' || !Array.isArray(box.actions)) return
+  if (!acked.has(box.iid)) {
+    const known = (await read($, view)).acks?.[box.iid] ?? 0
+    if (!acked.has(box.iid)) acked.set(box.iid, known)
+  }
+  const done = acked.get(box.iid) ?? 0
+  const todo = box.actions.filter(a => a && typeof a.seq === 'number' && a.seq > done && a.action && typeof a.action.type === 'string')
+  if (!todo.length) return
+  // Claimed before anything awaits, so a second post carrying the same actions skips them.
+  const top = Math.max(...todo.map(a => a.seq))
+  acked.set(box.iid, top)
+  await update($, view, (v): View => ({ ...v, acks: { ...Object.fromEntries(Object.entries(v.acks ?? {}).slice(-7)), [box.iid]: top } }))
+  for (const a of todo) await act($, a.action)
 }
 
 /** Shows a post right away; the next feed replaces it with the real thing. */
@@ -450,6 +603,8 @@ export const register: Register = on => {
     if (apiUrl) config.apiUrl = apiUrl.replace(/\/+$/, '')
     if (feedUrl) config.feedUrl = feedUrl
     if (modem) config.baud = modem === 'off' ? 0 : Number(modem) || config.baud
+    config.pager = (await $.env.get('LATENT_SPACE_PAGER')) !== 'off'
+    config.nudge = (await $.env.get('LATENT_SPACE_NUDGE')) !== 'off'
     await $.command.register({ name: 'bbs', description: 'Call lATENT sPACE, the BBS in a pane' })
     const acct = await account($)
     const lastRead = ((await $.store.get('lastRead')) ?? {}) as Record<string, number>
@@ -469,6 +624,14 @@ export const register: Register = on => {
     }
     $.clock.every(POLL_MS, () => void poll($))
     $.clock.every(30_000, () => void syncPresence($))
+    $.clock.every(PAGER_MS, () => void pager($))
+    return next(e)
+  })
+
+  // Quitting with the pane open: free the node instead of leaving it in Who's Online for ten minutes.
+  // A /clear keeps the process, and the pane, going.
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear' && (await read($, isOpen)) && (await read($, view)).me?.node) await api($, '/v1/logoff').catch(() => {})
     return next(e)
   })
 
@@ -488,8 +651,9 @@ export const register: Register = on => {
 
   on('ui.message', async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
-    const action = e.data as Action
-    if (action && typeof action === 'object' && typeof action.type === 'string') await act($, action)
+    const data = e.data as Action | Outbox
+    if (data && typeof data === 'object' && data.type === 'batch') await runOutbox($, data)
+    else if (data && typeof data === 'object' && typeof data.type === 'string') await act($, data)
     return {}
   })
 
@@ -509,23 +673,60 @@ export const register: Register = on => {
     )
   })
 
+  // The waiting room: during a long turn the hint under the prompt mentions the board. It never opens it.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const tail = await read($, nudge)
+    if (!tail || !e.props.isWorking) return next(e)
+    return next({ ...e, props: { ...e.props, tail: e.props.tail ? `${e.props.tail} · ${tail}` : tail } })
+  })
+
   // "What my Claude is doing": coarse, main loop only, never arguments.
   on('turn.start', async ($, e, next) => {
     const r = await next(e)
+    toolsInFlight = 0
+    turnNow = r.turnId
+    const turnId = r.turnId
+    await update($, view, v => (v.alert ? { ...v, alert: undefined } : v)).catch(() => {})
     await setClaude($, { state: 'thinking' }).catch(() => {})
+    $.clock.after(NUDGE_AFTER_MS, () => void nudgeCheck($, turnId).catch(() => {}))
     return r
   })
 
   on('tool.call', async ($, e, next) => {
-    if (!e.agentId) await setClaude($, { state: 'tool', tool: String(e.tool) }).catch(() => {})
-    const r = await next(e)
-    if (!e.agentId) await setClaude($, { state: 'thinking' }).catch(() => {})
-    return r
+    if (!e.agentId) {
+      toolsInFlight++
+      await setClaude($, { state: 'tool', tool: String(e.tool) }).catch(() => {})
+    }
+    try {
+      return await next(e)
+    } finally {
+      if (!e.agentId) {
+        toolsInFlight = Math.max(0, toolsInFlight - 1)
+        if (!toolsInFlight) await setClaude($, { state: 'thinking' }).catch(() => {})
+      }
+    }
   })
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) await setClaude($, { state: 'idle' }).catch(() => {})
+    if (!e.agentId) {
+      toolsInFlight = 0
+      turnNow = undefined
+      await update($, nudge, () => '').catch(() => {})
+      await setClaude($, { state: 'idle' }).catch(() => {})
+      if (e.reason !== 'aborted') {
+        const how = e.reason === 'answer' ? 'finished' : 'stopped'
+        await needsYou($, `CLAUDE ${how.toUpperCase()} · ESC TO RETURN`, `Claude ${how} · ${duration(e.durationMs)} · Esc to return`).catch(() => {})
+      }
+    }
     return r
+  })
+
+  // Claude asks for permission (or another answer) while the board has the keys.
+  on('classic.Notification', async ($, e, next) => {
+    if (e.notification_type === 'permission_prompt' || e.notification_type === 'elicitation_dialog') {
+      await needsYou($, 'CLAUDE NEEDS YOU · ESC TO RETURN', 'Claude needs your answer · Esc to return').catch(() => {})
+    }
+    return next(e)
   })
 }

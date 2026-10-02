@@ -5,6 +5,7 @@ export type FeedOneliner = { id: number; handle: string; text: string; ts: strin
 export type FeedRumor = { id: number; text: string; ts: string }
 export type FeedCaller = { handle: string; location: string; ts: string; node: number }
 export type FeedNode = { node: number; handle: string; status: string; since: string }
+export type FeedRecentPost = { slug: string; thread: number; id: number; handle: string; to: string; subject: string; ts: string }
 
 /** hub.json as published by the server (shared/protocol.ts HubFeed). */
 export type Feed = {
@@ -21,6 +22,8 @@ export type Feed = {
   conferences?: Conference[]
   polls?: Poll[]
   top?: { posters: TopEntry[]; callers: TopEntry[]; oneliners: TopEntry[] }
+  /** The newest post headers board-wide, newest first; absent from an older server's feed. */
+  recent?: FeedRecentPost[]
 }
 
 export type Conference = { n: number; slug: string; name: string; sponsor: string; description: string; posts: number; lastPostId: number; lastPostAt: string | null }
@@ -68,6 +71,12 @@ export type View = {
   feedError?: string
   /** True after a write failed with "busy"; cleared by the next success. */
   busy: boolean
+  /** The busy came from the network, not the server, so a feed that loads again clears it too. */
+  busyNet?: boolean
+  /** The highest action seq run, per screen instance, so the screen can drop them from its outbox. */
+  acks?: Record<string, number>
+  /** Shown over the status bar while the pane has the keys and Claude wants them back. */
+  alert?: string
   /** What this session's Claude is doing, already worded for the status bar. */
   claude: string
   /** The outcome of the latest action, newest id wins. */
@@ -98,6 +107,13 @@ export type Action =
   | { type: 'markAllRead' }
   | { type: 'vote'; poll: number; option: number }
   | { type: 'sysop'; op: SysopOp }
+  | { type: 'report'; conference: string; id: number }
+
+/**
+ * What the Client module posts: every action not yet acknowledged, numbered per screen
+ * instance (`iid`), since a later post in the same frame replaces an undelivered one.
+ */
+export type Outbox = { type: 'batch'; iid: string; seq: number; actions: { seq: number; action: Action }[] }
 
 /** What the sysop menu asks the server to do (the /v1/mod routes). */
 export type SysopOp =
@@ -106,6 +122,7 @@ export type SysopOp =
   | { kind: 'closePoll'; id: number }
   | { kind: 'motd'; text: string }
   | { kind: 'user'; action: 'ban' | 'unban' | 'mute'; handle: string; minutes?: number }
+  | { kind: 'deletePost'; conference: string; id: number; thread: number }
 
 /** Bookkeeping for the presence updates sent to the server. */
 export type Presence = { sent: string; sentAt: number; wanted: string }
@@ -121,6 +138,8 @@ declare module 'claude-code' {
       etags: Record<string, string>
       threads: Record<string, BoardThreadFile>
       presence: Presence
+      /** What the prompt hint adds during a long turn ("" for nothing). */
+      nudge: string
     }
   }
 }
