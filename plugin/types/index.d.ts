@@ -91,7 +91,135 @@ export type View = {
   newscan?: { scanning: boolean; items: ScanItem[] }
   /** Poll id → the option this account voted for. */
   votes: Record<string, number>
+  /** The door game on screen; absent until a door is opened. */
+  door?: DoorView
 }
+
+// ---------------------------------------------------------------------------
+// Doors: HYPERPLANE. The wire types are mirrored from shared/door/{data,protocol}.ts
+// (a contract stands alone); client/door/session.ts checks they stay identical.
+
+export type Commodity = 0 | 1 | 2
+export type PortClassId = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+export type ScannerKind = 'none' | 'density' | 'holo'
+export type ItemId =
+  | 'cracker' | 'beacon' | 'deadman' | 'cloak' | 'probe' | 'planetScanner' | 'contact' | 'limpet'
+  | 'photon' | 'density' | 'holo' | 'disruptor' | 'seed' | 'jump1' | 'jump2' | 'lens'
+
+export type DoorMap = { v: 1; season: string; sectors: number; warps: number[][]; concord: number[]; lanes: number[]; generatedAt: string }
+
+export type GameStatus = {
+  title: string; season: string; startedAt: string; ageDays: number; sectors: number; ports: number; planets: number
+  traders: number; goodPct: number; hallucinations: number; drifters: number; turnsPerDay: number; drydock?: number
+}
+export type LogEntry = { id: number; ts: string; kind: string; text: string }
+export type CommLine = { id: number; ts: string; from: string; text: string }
+export type TraderRanking = { name: string; rank: number; title: string; experience: number; alignment: number; corp?: string; netWorth: number }
+export type CorpRanking = { id: number; name: string; ceo: string; members: number; experience: number }
+export type DoorNews = {
+  v: 1; season: string; seq: number; generatedAt: string; status: GameStatus; log: LogEntry[]; comm: CommLine[]
+  rankings: { traders: TraderRanking[]; corps: CorpRanking[] }
+}
+
+export type Equipment = {
+  contactMines: number; limpets: number; beacons: number; seeds: number; crackers: number; deadman: number; cloaks: number
+  probes: number; disruptors: number; photons: number; scanner: ScannerKind; planetScanner: boolean; lens: boolean; jump: 0 | 1 | 2
+}
+export type ShipState = { type: number; name: string; holds: number; cargo: [number, number, number]; colonists: number; fighters: number; shields: number; equipment: Equipment }
+export type PlayerSnapshot = {
+  v: 1; season: string; id: number; name: string; sector: number; prevSector: number; turns: number; turnsMax: number
+  credits: number; bank: number; experience: number; alignment: number; timesBlownUp: number; deadUntil?: string
+  commissioned: boolean; corp?: { id: number; name: string; isCeo: boolean }; ship: ShipState; avoids: number[]
+  lastSeenLog: number; requestsToday: number
+}
+
+export type PortSighting = { name: string; class: PortClassId; destroyed?: boolean; buildingDays?: number }
+export type FighterMode = 'defensive' | 'offensive' | 'toll'
+export type MineKind = 'contact' | 'limpet'
+export type SectorView = {
+  id: number
+  region: 'concord' | 'uncharted'
+  beacon?: string
+  port?: PortSighting
+  planets: { id: number; name: string; class: string; owner?: string; shielded?: boolean }[]
+  traders: { name: string; ship: string; shipType: number; fighters: number; corp?: string }[]
+  ships: { name: string; owner: string; shipType: number; fighters: number }[]
+  fighters?: { count: number; owner: string; isYours: boolean; isCorp: boolean; mode: FighterMode }
+  navhaz: number
+  mines: { kind: MineKind; count: number; owner: string; isYours: boolean }[]
+  hallucinations: { name: string; shipType: number; fighters: number }[]
+  marshals: string[]
+  warps: number[]
+}
+export type PortItem = { status: 'buying' | 'selling'; trading: number; pct: number }
+export type PortReport = { sector: number; name: string; class: PortClassId; seenAt: string; items: [PortItem, PortItem, PortItem] }
+export type TradeStep = { commodity: Commodity; side: 'sell' | 'buy'; max: number; defaultQty: number; unitOffer: number }
+
+export type ShipwrightRequest = { op: 'buy'; ship: number; name: string } | { op: 'sell'; shipId: number } | { op: 'rename'; name: string }
+export type BankRequest = { op: 'deposit' | 'withdraw'; amount: number } | { op: 'transfer'; amount: number; to: string }
+export type AnnounceRequest = { text: string }
+
+/**
+ * A question the hooks module puts to the screen after a reply: a course to
+ * engage, an open haggle, a trading post's prices, or the Drydock's menu.
+ */
+export type DoorAsk =
+  | { kind: 'engage'; path: number[] }
+  /** `commodity`, `qty`, `ask` and `final` are set mid-haggle: the port's current figure for the locked quantity. */
+  | { kind: 'trade'; steps: TradeStep[]; at: number; round: number; commodity?: Commodity; qty?: number; ask?: number; final?: boolean; trading?: number[] }
+  | { kind: 'class0'; prices: { hold: number; fighter: number; shield: number } }
+  | { kind: 'drydock' }
+
+/** news.json, cut down for the title's Log and Rankings pages. */
+export type DoorBoard = { status?: GameStatus; log: LogEntry[]; rankings: TraderRanking[]; missing?: boolean }
+
+/** The part of the door the screen sees. The star map and what the player knows stay in hooks atoms. */
+export type DoorView = {
+  /** The season ("s1" is Epoch 1). */
+  season: string
+  phase: 'title' | 'loading' | 'new' | 'ready'
+  /** Bumped after every door action, so the screen knows its last one is done. */
+  rev: number
+  /** Pipe-coded lines, newest last, at most 300. */
+  transcript: string[]
+  snapshot?: PlayerSnapshot
+  here?: SectorView
+  /** A remote command is in flight. */
+  busy: boolean
+  board?: DoorBoard
+  ask?: DoorAsk
+}
+
+/** What the player knows of the season: explored sectors and last-seen port reports by sector. */
+export type DoorKnown = { season: string; explored: number[]; ports: Record<string, PortReport> }
+
+/** Commands the game runs without a request. */
+export type DoorLocalKey = 'D' | 'I' | '/' | '?' | 'V' | 'CI' | 'CK' | 'CR' | 'CX' | 'CL' | 'CG' | 'CE' | 'C?'
+
+/** One door command; most are one request, the local ones none. */
+export type DoorCmd =
+  | { cmd: 'enter' }
+  | { cmd: 'leave' }
+  | { cmd: 'news' }
+  | { cmd: 'create'; shipName: string }
+  | { cmd: 'local'; key: DoorLocalKey; arg?: number }
+  /** `engage`: offer the autopilot (M); otherwise only show the course (the computer's plotter). */
+  | { cmd: 'plot'; to: number; engage: boolean }
+  | { cmd: 'move'; path: number[]; mode: 'alert' | 'express' }
+  | { cmd: 'dock' }
+  | { cmd: 'offer'; commodity: Commodity; qty: number; price: number }
+  | { cmd: 'skip' }
+  | { cmd: 'class0'; holds: number; fighters: number; shields: number }
+  | { cmd: 'outfit'; item: ItemId; qty: number }
+  | { cmd: 'shipwright'; body: ShipwrightRequest }
+  | { cmd: 'bank'; body: BankRequest }
+  | { cmd: 'announce'; body: AnnounceRequest }
+  | { cmd: 'scan'; kind: 'density' | 'holo' }
+  | { cmd: 'probe'; to: number }
+  /** Toggles a sector on the avoid list; 0 clears it. */
+  | { cmd: 'avoid'; sector: number }
+  /** Drops the open question (no request). */
+  | { cmd: 'clear' }
 
 /** What the Client module posts to the hooks module. */
 export type Action =
@@ -108,6 +236,8 @@ export type Action =
   | { type: 'vote'; poll: number; option: number }
   | { type: 'sysop'; op: SysopOp }
   | { type: 'report'; conference: string; id: number }
+  /** A door command, with the lines typed for it (prompts and answers) to echo first. */
+  | ({ type: 'door'; echo?: string[] } & DoorCmd)
 
 /**
  * What the Client module posts: every action not yet acknowledged, numbered per screen
@@ -140,6 +270,11 @@ declare module 'claude-code' {
       presence: Presence
       /** What the prompt hint adds during a long turn ("" for nothing). */
       nudge: string
+      /** The door's star map for the season, fetched once a session. */
+      doorMap: { map?: DoorMap }
+      doorKnown: DoorKnown
+      /** The door's news.json, fetched on demand. */
+      doorNews: { news?: DoorNews }
     }
   }
 }
