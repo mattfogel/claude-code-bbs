@@ -123,7 +123,7 @@ describe('message screens', () => {
   it('reads a message with an Obv/2 header, sanitized and wrapped', () => {
     const s: AppState = { ...onMain(), screen: 'read', reader: { slug: 'general', thread: 1, scroll: 0, fromScan: false } }
     const out = text(s)
-    expect(out).toContain('[ General ]')
+    expect(out).toMatch(/╔═╡ General ╞═+╡ Msg 1 of 2 ╞═╗/)
     expect(out).toContain('Msg 1 of 2')
     expect(out).toMatch(/From: Razor\s+Date: /)
     expect(out).toContain('Subj: first post')

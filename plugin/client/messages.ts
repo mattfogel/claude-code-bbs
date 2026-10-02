@@ -4,9 +4,9 @@
 
 import type { AppState, ClientKey, Screen, Step } from './app'
 import type { Conference, View } from '../types'
-import { sanitizeUserBody, stripPipe, visibleLength, wrapPipe } from '../shared/pipe'
+import { fitPipe, sanitizeUserBody, stripPipe, visibleLength, wrapPipe } from '../shared/pipe'
 import { LIMITS, isValidHandle, normalizeHandle } from '../shared/protocol'
-import { ago, bar, clean, footer, header, pad, plain, stamp, windowOf } from './ui'
+import { LIGHTBAR, ago, bar, clean, footer, header, pad, panel, plain, stamp, windowOf } from './ui'
 
 export type Editor = {
   step: 'subject' | 'to' | 'body'
@@ -266,7 +266,7 @@ export function drawMessages(s: AppState, view: View, w: number, h: number, now:
         const c = all[i]
         const fresh = c.lastPostId > lastRead(view, c.slug) ? '|12*' : ' '
         const row = `${fresh}|15${String(c.n).padStart(2)}  |11${plain(c.name, LIMITS.conferenceNameMax).padEnd(26)}|07${String(c.posts).padStart(6)}  |08${plain(c.sponsor, LIMITS.handleMax)}`
-        lines.push(i === s.list ? `|21${fresh}|15${stripPipe(row).slice(1)} |16` : row)
+        lines.push(i === s.list ? `${LIGHTBAR}${fitPipe(stripPipe(row), w - 1)}|16` : row)
       }
       const sel = all[s.list]
       lines.push('', sel?.description ? `|07${clean(sel.description, LIMITS.motdMax)}` : '')
@@ -276,8 +276,8 @@ export function drawMessages(s: AppState, view: View, w: number, h: number, now:
     case 'threads': {
       const base = currentBase(s, view)
       if (!base) return [...header('Messages', w), '|08No message bases yet.']
-      const lines = [...header(`${base.n}: ${plain(base.name, LIMITS.conferenceNameMax)}`, w).slice(0, 1)]
-      lines.push(`|08Sponsor: |07${plain(base.sponsor, LIMITS.handleMax) || '-'}  |08Threads: |07${view.board?.slug === base.slug ? (view.board.index?.threadsTotal ?? '?') : '?'}`)
+      const lines = [...header(plain(base.name, LIMITS.conferenceNameMax), w, true)]
+      lines.push(`|08Base |15#${base.n}|08  Sponsor: |07${plain(base.sponsor, LIMITS.handleMax) || '-'}  |08Threads: |07${view.board?.slug === base.slug ? (view.board.index?.threadsTotal ?? '?') : '?'}`)
       const subjW = Math.max(10, w - 32)
       lines.push(`|13  ${'Subject'.padEnd(subjW)} ${'By'.padEnd(13)}${'Msgs'.padStart(4)}  Last`)
       const list = threadList(s, view)
@@ -288,7 +288,7 @@ export function drawMessages(s: AppState, view: View, w: number, h: number, now:
         const t = list[i]
         const fresh = t.lastPostId > lastRead(view, base.slug) ? '|12*' : ' '
         const text = `${plain(t.subject, LIMITS.subjectMax).slice(0, subjW).padEnd(subjW)} ${plain(t.lastHandle || t.handle, LIMITS.handleMax).slice(0, 13).padEnd(13)}${String(t.posts).padStart(4)}  ${ago(t.lastPostAt, now)}`
-        lines.push(i === s.list ? `${fresh}|21|15»${text}|16` : `${fresh} |07${text}`)
+        lines.push(i === s.list ? `${fresh}${LIGHTBAR}${fitPipe(`\u00bb${text}`, w - 2)}|16` : `${fresh} |07${text}`)
       }
       return [...pad(lines, h - 1).slice(0, h - 1), footer('|08[|15P|08]|07ost  |08[|15B|08]|07ase  |08[|15R|08]|07efresh  |08[|15Q|08]|07uit', w)]
     }
@@ -323,7 +323,7 @@ export function drawMessages(s: AppState, view: View, w: number, h: number, now:
         const mine = view.votes?.[String(p.id)] !== undefined
         const status = `${p.closed ? '|08closed' : '|10open'}|08, ${p.total} vote${p.total === 1 ? '' : 's'}${mine ? ', |11voted' : ''}`
         const q = plain(p.question, LIMITS.pollQuestionMax).slice(0, Math.max(10, w - 30))
-        lines.push(i === s.list ? `|21|15 ${i + 1}. ${q} |16 ${status}` : `|15 ${i + 1}|08. |07${q} |08(${status}|08)`)
+        lines.push(i === s.list ? `${LIGHTBAR}${fitPipe(` ${i + 1}. ${q}  ${stripPipe(status)}`, w - 1)}|16` : `|15 ${i + 1}|08. |07${q} |08(${status}|08)`)
       })
       return [...pad(lines, h - 1).slice(0, h - 1), footer('|08[|15#|08]|07 View  |08[|15Q|08]|07uit', w)]
     }
@@ -374,16 +374,11 @@ function drawReader(s: AppState, view: View, w: number, h: number): string[] {
   const post = t.posts.find(p => p.id === t.focus) ?? t.posts[0]
   const pos = `Msg ${post.n} of ${t.total}`
   const scanTag = r.fromScan ? ` |08· |07Newscan ${s.scan + 1}/${view.newscan?.items.length ?? 0}` : ''
-  const title = `|08┌─|05[|13 ${name} |05]${scanTag}`
-  const right = ` |07${pos} |08─┐`
-  const fill = Math.max(1, w - visibleLength(title) - visibleLength(right))
-  const lines = [
-    `${title}|08${'─'.repeat(fill)}${right}`,
-    `|13From|08: |15${plain(post.handle, LIMITS.handleMax).padEnd(17)}|13Date|08: |07${stamp(post.ts)}`,
-    `|13  To|08: |15${plain(post.to, LIMITS.handleMax)}`,
-    `|13Subj|08: |15${plain(post.subject, LIMITS.subjectMax)}`,
-    `|08${'─'.repeat(w)}`,
-  ]
+  const lines = panel(`${name}${scanTag}`, [
+    ` |13From|08: |15${plain(post.handle, LIMITS.handleMax).padEnd(17)}|13Date|08: |07${stamp(post.ts)}`,
+    ` |13  To|08: |15${plain(post.to, LIMITS.handleMax)}`,
+    ` |13Subj|08: |15${plain(post.subject, LIMITS.subjectMax)}`,
+  ], w, { right: pos, shadow: false })
   const room = Math.max(1, h - lines.length - 1)
   let body: string[]
   if (post.body === undefined) body = ['|08Loading...']
@@ -398,7 +393,7 @@ function drawEditor(s: AppState, view: View, w: number, h: number): string[] {
   const ed = s.editor
   if (!ed) return []
   const base = conferences(view).find(c => c.slug === ed.slug)
-  const lines = [...header(ed.replyTo !== undefined ? 'Reply' : 'Post a Message', w).slice(0, 1), `|08Base: |07${plain(base?.name ?? ed.slug, LIMITS.conferenceNameMax)}`]
+  const lines = [...header(ed.replyTo !== undefined ? 'Reply' : 'Post', w, true), `|08Base: |07${plain(base?.name ?? ed.slug, LIMITS.conferenceNameMax)}`]
   const field = (label: string, value: string, active: boolean, max: number) =>
     active ? `|13${label}|08: |15${value}|13▄|08${'·'.repeat(Math.max(0, max - [...value].length))}` : `|13${label}|08: |15${value}`
   if (ed.replyTo !== undefined) lines.push(`|13Subj|08: |15${plain(ed.subject, LIMITS.subjectMax)}`)

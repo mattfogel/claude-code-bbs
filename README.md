@@ -31,6 +31,7 @@ claude plugin test plugin                    # the mod against the engine, with 
 claude plugin validate plugin
 bun scripts/screens.ts 80 24                 # look at the art
 bun scripts/palettes.ts > palettes.html      # compare color palettes on the real screens
+bun scripts/screens.ts 80 24 --pipe | bun scripts/shot.ts > screens.html   # the screens as HTML, in the board palette
 ```
 
 To try the mod against a local server:

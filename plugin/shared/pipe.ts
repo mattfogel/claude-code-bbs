@@ -1,7 +1,8 @@
 // Pipe-code and MCI handling shared by the mod and the server.
 //
 // Colors follow Obv/2 / Renegade: |00-|15 set the foreground, |16-|23 set the
-// background (16 + n). %XX fields are MCI substitutions (%UN handle, ...).
+// background (16 + n), and |24-|31 the bright "iCE color" backgrounds the
+// system's own art uses. %XX fields are MCI substitutions (%UN handle, ...).
 // User text may carry |01-|15 only; everything else is stripped by
 // sanitizeUserText on both sides of the wire.
 
@@ -71,7 +72,7 @@ export function parsePipe(text: string, ctx: MciContext = {}, fg = 7, bg = 0, pa
       if (m) {
         const n = Number(m[1])
         if (n <= 15) fg = n
-        else if (n <= 23) bg = n - 16
+        else if (n <= 31) bg = n - 16 // |16-|23 classic, |24-|31 iCE (bright) backgrounds
         i += 3
         continue
       }

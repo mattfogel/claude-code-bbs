@@ -8,7 +8,7 @@ import { fitPipe, sanitizeUserText, stripPipe, visibleLength } from '../shared/p
 import { LIMITS, decodeStatus, describeStatus, isValidHandle, normalizeHandle } from '../shared/protocol'
 import { logo } from './logo'
 import { drawMessages, isMessageScreen, openThreads, pressMessages, type Editor, type MessageScreen, type Reader } from './messages'
-import { ago, center, clean, footer, header, hotkey, pad, plain, type Item } from './ui'
+import { LIGHTBAR, ago, center, clean, footer, frame, header, hotkey, pad, panel, plain, type Item } from './ui'
 
 /** A key as the Client surface hands it (ClientKeyEvent). */
 export type ClientKey = { key: string; ctrl?: true; shift?: true; meta?: true }
@@ -42,6 +42,8 @@ export type AppState = {
   scan: number
   /** The poll on screen. */
   poll?: number
+  /** When this call logged on (ms), for the time-left counter. */
+  loggedAt?: number
 }
 
 export const initialState = (seed = 0): AppState => ({ screen: 'matrix', sel: 0, input: null, apply: { handle: '', location: '' }, rumorSeed: seed, seen: 0, onBoard: false, list: 0, scan: 0 })
@@ -52,19 +54,25 @@ export const MATRIX: Item[] = [
   { key: 'w', label: "Who's On" },
 ]
 
+/** The main menu: two panels of five, then Goodbye on its own. */
 export const MAIN: (Item & { screen: Screen })[] = [
   { key: 'm', label: 'Messages', screen: 'threads' },
   { key: 'n', label: 'Newscan', screen: 'newscan' },
   { key: 'b', label: 'Base Change', screen: 'bases' },
-  { key: 'o', label: 'One-liners', screen: 'oneliners' },
-  { key: 'r', label: 'Rumors', screen: 'rumors' },
   { key: 'v', label: 'Voting Booth', screen: 'vote' },
   { key: 't', label: 'Top Ten', screen: 'top' },
+  { key: 'o', label: 'One-liners', screen: 'oneliners' },
+  { key: 'r', label: 'Rumors', screen: 'rumors' },
   { key: 'l', label: 'Last Callers', screen: 'callers' },
   { key: 'w', label: "Who's Online", screen: 'who' },
   { key: 's', label: 'Stats', screen: 'stats' },
   { key: 'g', label: 'Goodbye', screen: 'goodbye' },
 ]
+const PANEL = 5
+const GOODBYE = MAIN.length - 1
+
+/** Session length shown as time left, as a board's per-call limit was. Never enforced. */
+export const CALL_MINUTES = 60
 
 const INPUT_MAX: Record<InputPurpose, number> = {
   handle: LIMITS.handleMax,
@@ -82,7 +90,7 @@ const charOf = (k: ClientKey) => (k.key === 'space' ? ' ' : k.key)
 const latestNotice = (view: View) => view.notice?.id ?? 0
 
 /** One key pressed while the BBS has the keyboard. */
-export function press(state: AppState, key: ClientKey, view: View, rand: () => number = Math.random, width = 80): Step {
+export function press(state: AppState, key: ClientKey, view: View, rand: () => number = Math.random, width = 80, now = Date.now()): Step {
   const s: AppState = { ...state, msg: undefined, seen: latestNotice(view) }
   if (s.input) return typing(s, key, view)
   if (isMessageScreen(s.screen)) return pressMessages(s, key, view, width)
@@ -95,7 +103,7 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
       const pick = MATRIX[hot >= 0 ? hot : s.sel].key
       if (pick === 'l') {
         if (view.phase !== 'ready') return { state: { ...s, sel: 1, msg: 'No account on this node. |15A|07pply first.' } }
-        return { state: { ...s, screen: 'logon', onBoard: true, rumorSeed: Math.floor(rand() * 1e6) }, action: { type: 'call' } }
+        return { state: { ...s, screen: 'logon', onBoard: true, loggedAt: now, rumorSeed: Math.floor(rand() * 1e6) }, action: { type: 'call' } }
       }
       if (pick === 'a') {
         if (view.phase === 'ready') return { state: { ...s, msg: `You are already on file as |15${view.me?.handle}|07. Login.` } }
@@ -106,7 +114,7 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
 
     case 'apply': {
       // Sent, and either accepted or refused: any key moves on.
-      if (view.phase === 'ready') return { state: { ...s, screen: 'logon', onBoard: true, rumorSeed: Math.floor(rand() * 1e6) }, action: { type: 'call' } }
+      if (view.phase === 'ready') return { state: { ...s, screen: 'logon', onBoard: true, loggedAt: now, rumorSeed: Math.floor(rand() * 1e6) }, action: { type: 'call' } }
       if (view.registering) return { state: s }
       return { state: { ...s, apply: { handle: '', location: '' }, input: { purpose: 'handle', value: '' } } }
     }
@@ -118,7 +126,7 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
       const hot = MAIN.findIndex(i => i.key === key.key.toLowerCase())
       if (hot >= 0) return enterMain(s, hot, view)
       if (isEnter(key)) return enterMain(s, s.sel, view)
-      return { state: { ...s, sel: moveSel(s.sel, key, MAIN.length, 2) } }
+      return { state: { ...s, sel: moveMain(s.sel, key) } }
     }
 
     case 'oneliners':
@@ -168,6 +176,23 @@ function enterMain(s: AppState, index: number, view: View): Step {
       return { state: { ...next, list: 0 } }
   }
   return { state: next }
+}
+
+/** Lightbar moves on the main menu: down a panel, across panels, Goodbye below both. */
+function moveMain(sel: number, key: ClientKey): number {
+  const col = sel === GOODBYE ? -1 : Math.floor(sel / PANEL)
+  const row = sel % PANEL
+  switch (key.key) {
+    case 'down':
+      return col < 0 ? 0 : row === PANEL - 1 ? GOODBYE : sel + 1
+    case 'up':
+      return col < 0 ? PANEL - 1 : row === 0 ? GOODBYE : sel - 1
+    case 'left':
+    case 'right':
+    case 'tab':
+      return col < 0 ? sel : (sel + PANEL) % (PANEL * 2)
+  }
+  return sel
 }
 
 function moveSel(sel: number, key: ClientKey, count: number, perRow: number): number {
@@ -220,14 +245,25 @@ function clock(now: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-function statusBar(view: View, width: number, now: number): string {
-  const sep = '|05│|15'
-  const parts = ['lATENT sPACE']
+/** The status bar: two inverse lines, Obv/2 style, or one when rows are short. */
+function statusBar(view: View, width: number, now: number, base: string | undefined, rows: number): string[] {
+  const sep = ' |09\u2502|15 '
+  const parts = ['|11lATENT sPACE|15']
   if (view.me?.node) parts.push(`Node ${view.me.node}`)
   if (view.me) parts.push(view.me.handle)
+  if (base) parts.push(base)
+  if (frame.minsLeft !== undefined) parts.push(`${frame.minsLeft} mins`)
   parts.push(clock(now))
-  parts.push(view.busy ? '|14ALL NODES BUSY|15' : `Claude: ${view.claude}`)
-  return `|21|15 ${parts.join(` ${sep} `)}`
+  const claude = view.busy ? '|14ALL NODES BUSY - TRY AGAIN LATER' : `|09Claude |15${view.claude}`
+  const top = `|17|15 ${parts.join(sep)}`
+  if (rows < 2) return [fitPipe(`${top}${sep}${claude}`, width)]
+  return [fitPipe(top, width), fitPipe(`|17 ${claude}`, width)]
+}
+
+/** One main-menu entry inside a panel, `width` cells, lit when selected. */
+function panelItem(item: Item, isSel: boolean, width: number): string {
+  if (isSel) return fitPipe(`${LIGHTBAR} ${item.key.toUpperCase()}  ${item.label}`, width) + '|16'
+  return fitPipe(` |01\u2590|17|15${item.key.toUpperCase()}|16|01\u258c |07${item.label}`, width)
 }
 
 function inputLine(label: string, value: string, max: number): string {
@@ -245,13 +281,31 @@ function messageLine(state: AppState, view: View): string | undefined {
 /** Exactly `height` pipe-coded lines of exactly `width` cells. */
 export function draw(state: AppState, view: View, width: number, height: number, now: number = Date.now()): string[] {
   const w = Math.max(20, Math.min(width, 80))
-  const body = Math.max(1, height - 1)
+  const barRows = height >= 18 ? 2 : 1
+  const body = Math.max(1, height - barRows)
+  const base = (state.base ? view.feed?.conferences?.find(c => c.slug === state.base) : view.feed?.conferences?.[0])?.name
+  frame.w = w
+  frame.h = body
+  frame.handle = state.onBoard ? view.me?.handle : undefined
+  frame.minsLeft = state.onBoard && state.loggedAt !== undefined ? Math.max(0, CALL_MINUTES - Math.floor((now - state.loggedAt) / 60_000)) : undefined
+  frame.menu = menuName(state, base)
   const lines = pad(screenLines(state, view, w, body, now), body).slice(0, body)
   const msg = messageLine(state, view)
   if (msg && !state.input && state.screen !== 'apply' && body > 1) lines[body - 1] = msg
   const out = lines.map(l => fitPipe(`|07|16${l}`, w))
-  out.push(fitPipe(statusBar(view, w, now), w))
+  out.push(...statusBar(view, w, now, state.onBoard ? base : undefined, barRows))
   return out.slice(-Math.max(1, height))
+}
+
+const MENU_NAMES: Partial<Record<Screen, string>> = {
+  matrix: 'Matrix', apply: 'New User', logon: 'Logon', main: 'Main', oneliners: 'One-liners', rumors: 'Rumors',
+  callers: 'Callers', who: "Who's On", stats: 'Stats', bases: 'Bases', editor: 'Editor', newscan: 'Newscan',
+  vote: 'Voting', poll: 'Voting', top: 'Top Ten', goodbye: 'Goodbye',
+}
+
+function menuName(state: AppState, base: string | undefined): string {
+  if (state.screen === 'threads' || state.screen === 'read') return base ?? 'Messages'
+  return MENU_NAMES[state.screen] ?? 'Main'
 }
 
 
@@ -261,17 +315,23 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
   switch (state.screen) {
     case 'matrix': {
       const big = logo(w - 2)
-      const art = big ?? ['|05\u2591\u2592\u2593|13\u2588 |13l|15ATENT |13s|15PACE |13\u2588|05\u2593\u2592\u2591']
+      const art = big ?? ['|01\u2591|09\u2592|11\u2593|13\u2588 |13l|15ATENT |13s|15PACE |13\u2588|11\u2593|09\u2592|01\u2591']
+      const tagline = `|07${feed?.motd ? clean(feed.motd, LIMITS.motdMax) : 'a board for the hours Claude is busy'}`
+      const ruleW = Math.max(0, Math.floor((Math.min(w, 64) - visibleLength(tagline) - 2) / 2))
+      const rule = (flip: boolean) => {
+        const ramp = ['|01', '|09', '|11', '|13']
+        const cells = Array.from({ length: ruleW }, (_, i) => ramp[Math.min(3, Math.floor((i / Math.max(1, ruleW)) * 4))] + '\u2500')
+        return (flip ? cells.reverse() : cells).join('')
+      }
       const items = MATRIX.map((item, i) => hotkey(item, i === state.sel)).join('  ')
-      const online = feed ? `|08${feed.nodes.length} online · ${feed.stats.users} users · ${feed.stats.callsToday} calls today` : `|08${view.feedError ? 'carrier lost: ' + view.feedError : 'dialing...'}`
+      const box = panel('Connect', [` ${items} `], visibleLength(items) + 4)
+      const online = feed ? `|08${feed.nodes.length} online \u00b7 ${feed.stats.users} users \u00b7 ${feed.stats.callsToday} calls today` : `|08${view.feedError ? 'carrier lost: ' + view.feedError : 'dialing...'}`
       const block = [
         ...art.map(l => center(l, w)),
         '',
-        ...(big ? [center('|08-=|07[ |13l|15ATENT |13s|15PACE |07]|08=-', w)] : []),
-        center(`|07${feed?.motd ? clean(feed.motd, LIMITS.motdMax) : 'a board for the hours Claude is busy'}`, w),
+        center(`${rule(false)} ${tagline} ${rule(true)}`, w),
         '',
-        center(items, w),
-        '',
+        ...box.map(l => center(l, w)),
         center(online, w),
       ]
       const top = Math.max(0, Math.floor((h - block.length - 1) / 2))
@@ -324,17 +384,18 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
     }
 
     case 'main': {
-      const lines = [...header('Main Menu', w)]
-      const colWidth = Math.max(18, Math.floor((w - 4) / 2))
-      for (let i = 0; i < MAIN.length; i += 2) {
-        const left = fitPipe(hotkey(MAIN[i], state.sel === i), colWidth)
-        const right = MAIN[i + 1] ? hotkey(MAIN[i + 1], state.sel === i + 1) : ''
-        lines.push(`  ${left}${right}`)
-      }
-      lines.push('')
-      if (feed?.motd) lines.push(`|07${clean(feed.motd, LIMITS.motdMax)}`, '')
-      lines.push(`|08[|13Main Menu|08] |07Command: |15${MAIN[state.sel]?.label ?? ''}`)
-      return lines
+      const side = w >= 66
+      // Stacked panels need the rows a big header would take.
+      const lines = [...header('Main Menu', w, false, side)]
+      const pw = side ? Math.min(36, Math.floor((w - 3) / 2)) : Math.min(40, w - 2)
+      const box = (title: string, from: number) => panel(title, MAIN.slice(from, from + PANEL).map((item, i) => panelItem(item, state.sel === from + i, pw - 2)), pw)
+      const left = box('Messages', 0)
+      const right = box('The Board', PANEL)
+      if (side) left.forEach((l, i) => lines.push(` ${fitPipe(l, pw + 1)} ${right[i]}`))
+      else lines.push(...left.map(l => ` ${l}`), ...right.map(l => ` ${l}`))
+      lines.push(` ${panelItem(MAIN[GOODBYE], state.sel === GOODBYE, 20)}`)
+      if (feed?.motd && h - lines.length > 3) lines.push('', `|07${clean(feed.motd, LIMITS.motdMax)}`)
+      return [...pad(lines, h - 1).slice(0, h - 1), footer(`|07Command|08: |15${MAIN[state.sel]?.label ?? ''}`, w)]
     }
 
     case 'oneliners': {

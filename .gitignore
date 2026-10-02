@@ -5,3 +5,4 @@ node_modules/
 *.log
 plugin/.claude-plugin/types/
 palettes.html
+screens.html

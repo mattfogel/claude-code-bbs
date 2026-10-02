@@ -6,8 +6,9 @@ import { draw, initialState, type Screen } from '../plugin/client/app'
 import { parsePipe } from '../plugin/shared/pipe'
 import { THEME } from '../plugin/client/theme'
 
-const width = Number(process.argv[2] ?? 80)
-const height = Number(process.argv[3] ?? 24)
+const args = process.argv.slice(2).filter(a => !a.startsWith('--'))
+const width = Number(args[0] ?? 80)
+const height = Number(args[1] ?? 24)
 const now = Date.now()
 const ago = (s: number) => new Date(now - s * 1000).toISOString()
 
@@ -80,6 +81,12 @@ const extra: Partial<Record<Screen, object>> = {
 }
 for (const screen of screens) {
   const state = { ...initialState(), screen, ...extra[screen] } as ReturnType<typeof initialState>
+  if (process.argv.includes('--pipe')) {
+    // Raw pipe-coded lines, for scripts/shot.ts.
+    for (const line of draw({ ...state, onBoard: true, loggedAt: now - 18 * 60_000 }, screen === 'apply' ? { ...view, phase: 'new', me: undefined } : view, width, height, now)) console.log(line)
+    console.log('')
+    continue
+  }
   console.log(`\n--- ${screen} ---`)
   for (const line of draw(state, screen === 'apply' ? { ...view, phase: 'new', me: undefined } : view, width, height, now)) {
     console.log(parsePipe(line, {}, 7, 0, THEME).map(c => `\x1b[38;2;${rgb(c.fg)};48;2;${rgb(c.bg)}m${c.ch}`).join('') + '\x1b[0m')

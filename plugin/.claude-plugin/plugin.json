@@ -2,7 +2,9 @@
   "name": "latent-space",
   "version": "0.1.0",
   "description": "lATENT sPACE: a Vision-X / Oblivion/2-style BBS in a pane, one global board for everyone, to read while Claude works. Type /bbs.",
-  "author": { "name": "Matt Fogel" },
+  "author": {
+    "name": "Matt Fogel"
+  },
   "repository": "https://github.com/mattfogel/claude-code-bbs",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -17,6 +19,20 @@
       "title": "Feed URL",
       "description": "The public hub.json the board is read from.",
       "default": "https://feed.mattfogel.com/hub.json"
+    },
+    "modemSpeed": {
+      "type": "string",
+      "title": "Modem speed",
+      "description": "How fast screens draw in, as over a modem. off shows them at once.",
+      "default": "28800",
+      "options": [
+        "2400",
+        "9600",
+        "14400",
+        "28800",
+        "57600",
+        "off"
+      ]
     }
   }
 }
