@@ -48,9 +48,9 @@ Then point the plugin at the dev server in `~/.claude/settings.json`:
 ## Deploy (once)
 
 1. Add the `mattfogel.com` zone to the Cloudflare account.
-2. `cd server && npx wrangler d1 create latent-space`, then put the printed id in `wrangler.jsonc`.
-3. `npx wrangler r2 bucket create latent-space-feed`, then attach the custom domain `feed.mattfogel.com` to it in the dashboard and add a cache rule that caches everything on that host and respects origin `Cache-Control`.
-4. Uncomment the `routes` block in `wrangler.jsonc`. Under Workers, set "fail closed" for the free-plan limit.
+2. `cd server && npx wrangler d1 create latent-space`, then put the printed id in both `d1_databases` entries in `wrangler.jsonc` (top level and `env.production`).
+3. `npx wrangler r2 bucket create latent-space-feed`, then attach the custom domain `feed.mattfogel.com` to it in the dashboard and add a cache rule (zone → Caching → Cache Rules) that caches everything on that host and respects origin `Cache-Control`.
+4. Check that `env.production` in `wrangler.jsonc` has the right D1 id and routes. `bbs.mattfogel.com` is a custom domain, so it already fails closed (error 1027) when it hits the free-plan limit. There is no toggle to set.
 5. `npm run deploy -- --env production` (applies the D1 migrations and deploys).
 6. Register through the mod, then make yourself sysop:
    `npx wrangler d1 execute latent-space --remote --command "UPDATE users SET role = 'sysop' WHERE handle = 'mattf'"`.

@@ -1,42 +1,73 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "latent-space",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-08-15",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
-
-  // Writes only. Reads come from the R2 feed on feed.mattfogel.com and never
-  // reach this Worker. Uncomment once the mattfogel.com zone is on the account.
-  // "routes": [{ "pattern": "bbs.mattfogel.com", "custom_domain": true }],
-  // "workers_dev": false,
-
-  "durable_objects": {
-    "bindings": [{ "name": "HUB", "class_name": "Hub" }]
-  },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
-
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "latent-space",
-      // Replace with the id `wrangler d1 create latent-space` prints.
-      "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "migrations"
-    }
-  ],
-
-  "r2_buckets": [{ "binding": "FEED", "bucket_name": "latent-space-feed" }],
-
-  "vars": {
-    // "1" serves GET /feed/* from R2 through the Worker: for `wrangler dev`
-    // and tests only. Production reads go to the public bucket domain.
-    "SERVE_FEED": "1",
-    "POW_BITS": "16"
-  },
-  "env": {
-    "production": {
-      "vars": { "SERVE_FEED": "0", "POW_BITS": "16" }
-    }
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "latent-space",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-15",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "HUB",
+				"class_name": "Hub"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"Hub"
+			]
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "latent-space",
+			"database_id": "e9470bc6-d0fe-4779-83dd-0f86c5e21800",
+			"migrations_dir": "migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "FEED",
+			"bucket_name": "latent-space-feed"
+		}
+	],
+	"vars": {
+		// "1" serves GET /feed/* from R2 through the Worker: for `wrangler dev`
+		// and tests only. Production reads go to the public bucket domain.
+		"SERVE_FEED": "1",
+		"POW_BITS": "16"
+	},
+	"env": {
+		// Bindings are not inherited by environments, so they are repeated here.
+		"production": {
+			// Writes only. Reads come from the R2 feed on feed.mattfogel.com and
+			// never reach this Worker.
+			"routes": [{ "pattern": "bbs.mattfogel.com", "custom_domain": true }],
+			"workers_dev": false,
+			"durable_objects": {
+				"bindings": [{ "name": "HUB", "class_name": "Hub" }]
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "latent-space",
+					"database_id": "e9470bc6-d0fe-4779-83dd-0f86c5e21800",
+					"migrations_dir": "migrations"
+				}
+			],
+			"r2_buckets": [{ "binding": "FEED", "bucket_name": "latent-space-feed" }],
+			"vars": {
+				"SERVE_FEED": "0",
+				"POW_BITS": "16"
+			}
+		}
+	}
 }
