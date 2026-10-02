@@ -64,6 +64,7 @@ function fakeBoard(on: On) {
         conferences: conferences(),
         polls: [{ id: 1, question: 'Best modem?', options: [0, 1].map(o => ({ text: o ? 'US Robotics' : '14.4', votes: board.votes.filter(v => v.option === o).length })), total: board.votes.length, closed: false, createdAt: iso }],
         top: { posters: [], callers: [], oneliners: [] },
+        recent: [...board.posts].reverse().map(p => ({ slug: p.slug, thread: p.thread, id: p.id, handle: p.handle, to: p.to, subject: p.subject, ts: p.ts })),
       }, { etag })
     }
     const file = /^https:\/\/feed\.mattfogel\.com\/boards\/([a-z]+)\/(index|threads\/(\d+))\.json$/.exec(e.url)
@@ -105,6 +106,10 @@ function fakeBoard(on: On) {
       return json(200, { node: 1 })
     }
     if (path === '/v1/logoff') return json(200, { ok: true })
+    if (path === '/v1/report') {
+      board.mod.push({ path, body })
+      return json(200, { ok: true })
+    }
     if (path === '/v1/me') return json(200, { handle, location: 'NYC', role: board.roles.get(handle) ?? 'user', createdAt: iso })
     if (path.startsWith('/v1/mod/')) {
       if ((board.roles.get(handle) ?? 'user') === 'user') return json(403, { error: { code: 'forbidden', message: 'Sysops and mods only.' } })
@@ -130,13 +135,28 @@ function fakeBoard(on: On) {
   return board
 }
 
+const MATTF = { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' }
+
+/** What the engine shows besides the pane: toasts and the pinned status line. */
+function chrome(on: On) {
+  const seen = { toasts: [] as string[], status: [] as (string | undefined)[] }
+  on('ui.toast', async (_$, e) => (seen.toasts.push(e.text), undefined as never))
+  on('ui.status', async (_$, e) => (seen.status.push(e.text), { value: undefined }) as never)
+  return seen
+}
+
 /** The engine pieces beneath the plugin a session would provide. */
-function engine(on: On, store: Record<string, unknown> = {}) {
-  mock.store(on, store)
-  mock.env(on, { LATENT_SPACE_MODEM: 'off' })
+/** `ownStore`: the test answers $.store itself. */
+type EngineOpts = { pane?: { focused: boolean; shown: boolean } | null; env?: Record<string, string>; opened?: string[]; ownStore?: boolean }
+
+function engine(on: On, store: Record<string, unknown> = {}, opts: EngineOpts = {}) {
+  const pane = opts.pane === undefined ? { focused: true, shown: true } : opts.pane
+  if (!opts.ownStore) mock.store(on, store)
+  on('ui.panes', async () => ({ value: pane ? [{ id: PANE, title: 'lATENT sPACE', isFocused: pane.focused, isShown: pane.shown, isPlaced: true }] : [] }) as never)
+  mock.env(on, { LATENT_SPACE_MODEM: 'off', ...opts.env })
   const clock = mock.clock(on, { now: NOW })
   on('command.register', async () => ({ value: undefined }) as never)
-  on('ui.open', async () => ({ value: { isPlaced: true } }) as never)
+  on('ui.open', async (_$, e) => (opts.opened?.push(e.id), { value: { isPlaced: true } }) as never)
   on('session.start', async ($, e) => ({ cwd: e.cwd }))
   return clock
 }
@@ -315,5 +335,189 @@ describe('first run', () => {
     on('ui.toast', async (_$, e) => (toasts.push(e.text), undefined as never))
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
     expect(toasts).toHaveLength(0)
+  })
+})
+
+describe('Claude-native alerts', () => {
+  test('a reply addressed to you is toasted once and pinned until read, with the pane closed', async ($, on) => {
+    const clock = engine(on, { account: MATTF, lastRead: { general: 1 } }, { pane: null })
+    const seen = chrome(on)
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    const iso = new Date(NOW).toISOString()
+    board.posts.push({ id: 1, slug: 'general', thread: 1, handle: 'mattf', to: 'All', subject: 'modems', body: 'what did you dial in with?', ts: iso, replyTo: null })
+    board.posts.push({ id: 2, slug: 'general', thread: 1, handle: 'Razor', to: 'mattf', subject: 'Re: |12modems', body: 'a Courier', ts: iso, replyTo: 1 })
+    board.posts.push({ id: 3, slug: 'general', thread: 1, handle: 'Blade', to: 'All', subject: 'Re: modems', body: 'me too', ts: iso, replyTo: 1 })
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+
+    await clock.advance(120_000)
+    expect(seen.toasts).toEqual(['Razor replied to you on lATENT sPACE: Re: modems'])
+    expect(seen.status.at(-1)).toBe('lATENT sPACE: 1 message for you · /bbs')
+
+    board.seq++
+    await clock.advance(120_000)
+    expect(seen.toasts).toHaveLength(1)
+  })
+
+  test('the pager stays off when asked', async ($, on) => {
+    const clock = engine(on, { account: MATTF }, { pane: null, env: { LATENT_SPACE_PAGER: 'off' } })
+    chrome(on)
+    const board = fakeBoard(on)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    await clock.advance(10 * 60_000)
+    expect(board.requests).toHaveLength(0)
+  })
+
+  test('says so on the board when Claude finishes or asks while the pane has the keys', async ($, on) => {
+    engine(on, { account: MATTF })
+    const seen = chrome(on)
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    on('turn.start', async ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', async () => ({ text: '' }) as never)
+    on('classic.Notification', async () => ({}) as never)
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    await ui.key({ key: 'l' })
+
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.turn.complete({ answer: 'done', durationMs: 134_000, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+    expect(seen.toasts.at(-1)).toBe('Claude finished · 2m14s · Esc to return')
+    expect(await screen(ui)).toContain('CLAUDE FINISHED')
+
+    await $.turn.start({ text: 'again', turnId: 't2' })
+    expect(await screen(ui)).not.toContain('CLAUDE FINISHED')
+    await $.classic.Notification({ message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' } as never)
+    expect(await screen(ui)).toContain('CLAUDE NEEDS YOU')
+    await ui.unmount()
+  })
+
+  test('stays quiet when the pane does not have the keys', async ($, on) => {
+    engine(on, { account: MATTF }, { pane: { focused: false, shown: true } })
+    const seen = chrome(on)
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    on('turn.start', async ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', async () => ({ text: '' }) as never)
+    await start($)
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    await $.turn.complete({ answer: 'done', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+    expect(seen.toasts).toHaveLength(0)
+  })
+
+  test('mentions the board in the prompt hint during a long turn, never opening it', async ($, on) => {
+    const opened: string[] = []
+    const clock = engine(on, { account: MATTF, lastRead: {} }, { pane: null, opened })
+    chrome(on)
+    const board = fakeBoard(on)
+    board.posts.push({ id: 1, slug: 'general', thread: 1, handle: 'Razor', to: 'All', subject: 'modems', body: 'hi', ts: new Date(NOW).toISOString(), replyTo: null })
+    const tails: (string | undefined)[] = []
+    on('ui.render', { component: 'PromptHint' }, async ($, e) => {
+      tails.push(e.props.tail)
+      const { Text } = $.ui.resolve(e)
+      return <Text>{e.props.hint}</Text>
+    })
+    on('turn.start', async ($, e) => ({ turnId: e.turnId }))
+    on('turn.complete', async () => ({ text: '' }) as never)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    const hint = { isDraft: false, isWorking: true, hint: 'esc to interrupt' }
+
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    let ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'PromptHint', props: hint })
+    await ui.unmount()
+    expect(tails.at(-1)).toBeUndefined()
+
+    await clock.advance(30_000)
+    ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'PromptHint', props: hint })
+    await ui.unmount()
+    expect(tails.at(-1)).toBe('/bbs: 0 online, 1 new')
+    expect(opened).toEqual([])
+
+    await $.turn.complete({ answer: 'done', durationMs: 31_000, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+    ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'PromptHint', props: hint })
+    await ui.unmount()
+    expect(tails.at(-1)).toBeUndefined()
+  })
+
+  test('reports a message, and lets a sysop delete one', async ($, on) => {
+    engine(on, { account: MATTF })
+    chrome(on)
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    board.roles.set('mattf', 'sysop')
+    board.posts.push({ id: 1, slug: 'general', thread: 1, handle: 'Spammer', to: 'All', subject: 'buy', body: 'warez', ts: new Date(NOW).toISOString(), replyTo: null })
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    for (const key of ['l', 'x', 'n', 'return']) await ui.key({ key })
+    expect(await screen(ui)).toContain('warez')
+
+    await ui.key({ key: '!' })
+    expect(await screen(ui)).toContain('Report message #1 to the SysOp?')
+    await ui.key({ key: 'y' })
+    for (let i = 0; i < 5 && !board.mod.length; i++) await ui.advance(60)
+    expect(board.mod.at(-1)).toEqual({ path: '/v1/report', body: { kind: 'post', conference: 'general', id: 1 } })
+    expect(await screen(ui)).toContain('Reported to the SysOp')
+
+    for (const key of ['d', 'y']) await ui.key({ key })
+    for (let i = 0; i < 5 && board.mod.length < 2; i++) await ui.advance(60)
+    expect(board.mod.at(-1)).toEqual({ path: '/v1/mod/delete', body: { kind: 'post', conference: 'general', id: 1 } })
+    await ui.unmount()
+  })
+})
+
+describe('fixes', () => {
+  test('a refused account is set aside, not destroyed', async ($, on) => {
+    const kept: Record<string, unknown> = {}
+    on('store.set', async (_$, e) => ((kept[e.key] = e.value), { value: undefined }) as never)
+    on('store.get', async (_$, e) => ({ value: e.key === 'account' && !('account' in kept) ? MATTF : undefined }) as never)
+    on('store.delete', async (_$, e) => ((kept[e.key] = undefined), { value: undefined }) as never)
+    engine(on, {}, { ownStore: true })
+    fakeBoard(on) // knows no users: every write is unauthorized
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    await ui.key({ key: 'l' })
+    expect(kept.accountRevoked).toMatchObject(MATTF)
+    expect(await screen(ui)).toContain('no longer knows this account')
+    await ui.unmount()
+  })
+
+  test('a network blip clears once the feed answers again', async ($, on) => {
+    const clock = engine(on, { account: MATTF })
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    board.down = true
+    await ui.key({ key: 'l' })
+    expect(await screen(ui)).toContain('ALL NODES BUSY')
+    board.down = false
+    expect(await screen(ui)).not.toContain('Claude idle')
+    await clock.advance(10_000)
+    expect(await screen(ui)).toContain('Claude idle')
+    await ui.unmount()
+  })
+
+  test('parallel tool calls keep the status on a tool until the last one ends', async ($, on) => {
+    engine(on, { account: MATTF })
+    const board = fakeBoard(on)
+    board.users.set(MATTF.secret, 'mattf')
+    let release: () => void = () => {}
+    const slow = new Promise<void>(r => (release = r))
+    on('tool.call', async (_$, e) => {
+      if ((e as { command?: string }).command === 'slow') await slow
+      return { result: 'ok' } as never
+    })
+    on('turn.start', async ($, e) => ({ turnId: e.turnId }))
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    await ui.key({ key: 'l' })
+    await $.turn.start({ text: 'go', turnId: 't1' })
+    const first = $.tool.call({ tool: 'Bash', command: 'slow', description: 'a' } as never)
+    await $.tool.call({ tool: 'Grep', pattern: 'x' } as never)
+    expect(await screen(ui)).toContain('running Grep')
+    release()
+    await first
+    expect(await screen(ui)).toContain('thinking')
+    await ui.unmount()
   })
 })

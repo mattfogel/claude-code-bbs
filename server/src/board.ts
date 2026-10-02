@@ -55,7 +55,7 @@ export class Board extends DurableObject<Env> {
 
   // ---- writing ------------------------------------------------------------
 
-  async post(slug: string, user: Caller, p: NewPost): Promise<HubResult<{ id: number; thread: number; ts: number }>> {
+  async post(slug: string, user: Caller, p: NewPost): Promise<HubResult<{ id: number; thread: number; ts: number; to: string; subject: string }>> {
     this.set('slug', slug)
     const now = Date.now()
     let threadId: number
@@ -98,7 +98,7 @@ export class Board extends DurableObject<Env> {
       .one().id
     this.sql.exec('UPDATE threads SET posts = posts + 1, last_post_id = ?, last_post_at = ?, last_handle = ? WHERE id = ?', id, now, user.handle, threadId)
     await this.markDirty([threadId])
-    return { ok: true, value: { id, thread: threadId, ts: now } }
+    return { ok: true, value: { id, thread: threadId, ts: now, to: to || 'All', subject } }
   }
 
   async author(postId: number): Promise<number | undefined> {

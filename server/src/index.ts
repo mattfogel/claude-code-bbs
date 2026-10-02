@@ -221,7 +221,7 @@ app.post('/v1/posts', async c => {
   if (!quota.ok) return fail(c, quota.code, quota.message)
   const r = await board(c.env, slug).post(slug, caller(u), { subject, to, body: text, replyTo, thread })
   if (!r.ok) return fail(c, r.code, r.message)
-  await h.messagePosted(caller(u), slug, r.value.id, r.value.ts)
+  await h.messagePosted(caller(u), slug, r.value)
   return c.json<PostResponse>({ id: r.value.id, thread: r.value.thread })
 })
 
@@ -280,7 +280,7 @@ app.post('/v1/mod/delete', async c => {
     const author = await b.author(id)
     const r = await b.remove(id)
     if (!r.ok) return fail(c, r.code, r.message)
-    await hub(c.env).messagesRemoved(slug, 1, author)
+    await hub(c.env).messagesRemoved(slug, 1, author, id)
     await modlog(c, 'delete', `post:${slug}:${id}`)
     return c.json({ ok: true })
   }

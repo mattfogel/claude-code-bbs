@@ -46,6 +46,8 @@ export class Hub extends DurableObject<Env> {
         posts INTEGER NOT NULL DEFAULT 0, last_post_id INTEGER NOT NULL DEFAULT 0, last_post_at INTEGER);
       CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, handle TEXT NOT NULL, posts INTEGER NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, oneliners INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS polls (id INTEGER PRIMARY KEY AUTOINCREMENT, question TEXT NOT NULL, options TEXT NOT NULL, created INTEGER NOT NULL, closed INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS recent (slug TEXT NOT NULL, post_id INTEGER NOT NULL, thread_id INTEGER NOT NULL, user_id INTEGER NOT NULL, handle TEXT NOT NULL,
+        to_handle TEXT NOT NULL, subject TEXT NOT NULL, ts INTEGER NOT NULL, PRIMARY KEY (slug, post_id));
       CREATE TABLE IF NOT EXISTS votes (poll_id INTEGER NOT NULL, user_id INTEGER NOT NULL, option INTEGER NOT NULL, PRIMARY KEY (poll_id, user_id));
     `)
     if (!this.get('conferencesSeeded', 0)) {
@@ -247,17 +249,25 @@ export class Hub extends DurableObject<Env> {
     return this.takeQuota(userId, 'message', Date.now(), LIMITS.messageCooldownSec, LIMITS.messagesPerDay)
   }
 
-  /** A Board stored a post: conference counters, Top Ten, and the feed. */
-  async messagePosted(user: Caller, slug: string, postId: number, ts: number): Promise<void> {
+  /** A Board stored a post: conference counters, Top Ten, the recent list, and the feed. */
+  async messagePosted(user: Caller, slug: string, post: { id: number; thread: number; ts: number; to: string; subject: string }): Promise<void> {
+    const postId = post.id
+    const ts = post.ts
     this.sql.exec('UPDATE conferences SET posts = posts + 1, last_post_id = MAX(last_post_id, ?), last_post_at = ? WHERE slug = ?', postId, ts, slug)
+    this.sql.exec(
+      'INSERT OR REPLACE INTO recent (slug, post_id, thread_id, user_id, handle, to_handle, subject, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      slug, postId, post.thread, user.id, user.handle, post.to, post.subject, ts,
+    )
+    this.sql.exec('DELETE FROM recent WHERE rowid NOT IN (SELECT rowid FROM recent ORDER BY ts DESC, rowid DESC LIMIT ?)', LIMITS.feedRecent)
     this.bump('postsTotal')
     this.bumpUser(user, 'posts')
     await this.markDirty()
   }
 
   /** A Board hid posts (moderation): the counters follow. */
-  async messagesRemoved(slug: string, count: number, userId?: number): Promise<void> {
+  async messagesRemoved(slug: string, count: number, userId?: number, postId?: number): Promise<void> {
     if (count <= 0) return
+    if (postId !== undefined) this.sql.exec('DELETE FROM recent WHERE slug = ? AND post_id = ?', slug, postId)
     this.sql.exec('UPDATE conferences SET posts = MAX(0, posts - ?) WHERE slug = ?', count, slug)
     this.bump('postsTotal', -count)
     if (userId !== undefined) this.sql.exec('UPDATE user_stats SET posts = MAX(0, posts - ?) WHERE user_id = ?', count, userId)
@@ -329,6 +339,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec('DELETE FROM presence WHERE user_id = ?', userId)
     this.sql.exec('DELETE FROM callers WHERE user_id = ?', userId)
     this.sql.exec('DELETE FROM user_stats WHERE user_id = ?', userId)
+    this.sql.exec('DELETE FROM recent WHERE user_id = ?', userId)
     await this.markDirty()
   }
 
@@ -401,6 +412,13 @@ export class Hub extends DurableObject<Env> {
       conferences: this.conferences(),
       polls: this.polls(),
       top: { posters: this.top('posts'), callers: this.top('calls'), oneliners: this.top('oneliners') },
+      recent: this.sql
+        .exec<{ slug: string; post_id: number; thread_id: number; handle: string; to_handle: string; subject: string; ts: number }>(
+          'SELECT slug, post_id, thread_id, handle, to_handle, subject, ts FROM recent ORDER BY ts DESC, rowid DESC LIMIT ?',
+          LIMITS.feedRecent,
+        )
+        .toArray()
+        .map(r => ({ slug: r.slug, thread: r.thread_id, id: r.post_id, handle: r.handle, to: r.to_handle, subject: r.subject, ts: iso(r.ts) })),
     }
   }
 

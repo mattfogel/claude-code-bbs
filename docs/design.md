@@ -75,12 +75,14 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
   "rumors":     [{ "id": "…", "text": "…", "ts": "…" }],                      // last 50; clients pick one at random
   "lastCallers":[{ "handle": "…", "location": "…", "ts": "…", "node": 3 }],   // last 10
   "nodes":      [{ "node": 3, "handle": "mattf", "status": "Claude is running Bash…", "since": "…" }],
-  "stats":      { "users": 412, "callsToday": 87, "onelinersTotal": 3051 }
+  "stats":      { "users": 412, "callsToday": 87, "onelinersTotal": 3051 },
+  "recent":     [{ "slug": "general", "thread": 4, "id": 31, "handle": "zer0", "to": "mattf", "subject": "Re: modems", "ts": "…" }]  // last 30 post headers, never bodies
 }
 ```
 
 - **Fetching:** clients fetch with `If-None-Match`. The Cloudflare cache handles ETags, and a 304 is cheap.
-- **Poll rate:** about every 10 s while the pane is focused, about every 30 s while it is open but unfocused, and not at all when the pane is closed.
+- **Poll rate:** about every 10 s while the pane is focused, about every 30 s while it is open but unfocused. With the pane closed, the pager reads `hub.json` every 2 min (only for a caller with an account, and never if `LATENT_SPACE_PAGER=off`), plus once when a turn passes 30 s, for the prompt-hint nudge. Every one of those reads is served by the cache.
+- **Board files:** a poll fetches the open board's index or thread only when `hub.json` says that conference (or thread) has a newer post.
 - **Your own writes:** a client merges them in optimistically, so posting feels instant.
 
 ## Write API (`bbs.mattfogel.com/v1`)
@@ -143,7 +145,14 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
   - *Message of the Day:* edit, starting from the current one.
   - *Ban / Unban / Mute* a handle (mute takes minutes).
   - Every change goes through a form (Enter next, Up back, Backspace on an empty first field cancels) and a Y/N confirm, then calls the `/v1/mod/*` route and refreshes the feed once the Hub has published.
-- **Status bar** (bottom row): `lATENT sPACE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`.
+- **Status bar** (bottom row): `lATENT sPACE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`. A dead feed shows `NO CARRIER` there, on every screen.
+- **Claude-native alerts** (all local, nothing extra leaves the machine):
+  - *Claude wants the keys back:* while the pane has the keys, `turn.complete` (main loop) and a `classic.Notification` for a permission prompt or question put `*** CLAUDE FINISHED · ESC TO RETURN ***` over the status bar and show a toast with the turn's length. It clears at the next turn or when the pane loses the keys.
+  - *Waiting room:* once a main-loop turn has run 30 s with the pane not shown, the prompt hint gets a `tail`: `/bbs: 4 online, 2 new`. It clears at `turn.complete`. The board never opens itself. `LATENT_SPACE_NUDGE=off` turns it off.
+  - *Mail for you:* posts in `recent` addressed `To:` your handle and past your read pointer pin `lATENT sPACE: 2 messages for you` as the plugin's status line (`$.ui.status`), and each one is toasted once (`told` in `$.store`).
+- **Reader moderation:** `!` reports the message on screen (`/v1/report`); for sysops and mods, `D` deletes it. Both ask Y/N first.
+- **Actions from the screen** go to the hooks module as an outbox: every post carries each action not yet acknowledged, numbered per screen instance, because a later `surface.post` in the same frame replaces an undelivered one. The hooks module runs each number once and acknowledges it in `view.acks`.
+- **A refused account** (`unauthorized`) is moved to `accountRevoked` in `$.store` rather than deleted, so a server-side mistake can't cost anyone their handle for good.
 - **"What my Claude is doing":**
   - `turn.start`, `tool.call` and `turn.complete` hooks set the local status ("Claude is thinking…", "Claude is running Bash…", "idle").
   - The status bar shows it, and the presence update sends it, throttled.

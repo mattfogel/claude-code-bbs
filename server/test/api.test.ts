@@ -218,6 +218,12 @@ describe('message bases', () => {
     expect(general.posts).toBe(2)
     expect(general.lastPostId).toBe(file.posts[1].id)
     expect(feed.top.posters.map(t => t.handle)).toEqual(expect.arrayContaining(['Razor', 'Blade']))
+    // Headers of the newest posts, so a client can spot replies addressed to it.
+    expect(feed.recent.slice(0, 2).map(p => [p.handle, p.to, p.subject, p.thread])).toEqual([
+      ['Blade', 'Razor', 'Re: first post', thread],
+      ['Razor', 'All', 'first post', thread],
+    ])
+    expect(feed.recent[0]).not.toHaveProperty('body')
   })
 
   it('refuses bad posts', async () => {
@@ -244,6 +250,7 @@ describe('message bases', () => {
     const feed = await publishedFeed()
     expect(feed.conferences.at(-1)).toMatchObject({ n: 5, slug: 'demoscene', sponsor: 'Tinkerer' })
     expect(feed.conferences.find(c => c.slug === 'showoff')?.posts).toBe(0)
+    expect(feed.recent.some(p => p.slug === 'showoff' && p.id === r.id)).toBe(false)
   })
 })
 
