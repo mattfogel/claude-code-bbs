@@ -32,7 +32,7 @@ const etags = atom({ plugin: 'latent-space', key: 'etags' } as const, {} as Reco
 const threads = atom({ plugin: 'latent-space', key: 'threads' } as const, {} as Record<string, BoardThreadFile>)
 const presence = atom({ plugin: 'latent-space', key: 'presence' } as const, { sent: '', sentAt: 0, wanted: 'idle' } as Presence)
 
-/** Set by register from the plugin's options. */
+/** Defaults, overridden at session start by LATENT_SPACE_API_URL, LATENT_SPACE_FEED_URL and LATENT_SPACE_MODEM (a baud rate, or off). */
 const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800 }
 
 /** A file next to hub.json on the feed (boards/<slug>/...). */
@@ -439,14 +439,17 @@ async function openPane($: Dollar) {
   void poll($, true)
 }
 
-export const register: Register = (on, options) => {
-  config.apiUrl = String(options.apiUrl || config.apiUrl).replace(/\/+$/, '')
-  config.feedUrl = String(options.feedUrl || config.feedUrl)
-  config.baud = options.modemSpeed === 'off' ? 0 : Number(options.modemSpeed) || config.baud
+export const register: Register = on => {
 
   // ---- hooks --------------------------------------------------------------
 
   on('session.start', async ($, e, next) => {
+    const apiUrl = await $.env.get('LATENT_SPACE_API_URL')
+    const feedUrl = await $.env.get('LATENT_SPACE_FEED_URL')
+    const modem = await $.env.get('LATENT_SPACE_MODEM')
+    if (apiUrl) config.apiUrl = apiUrl.replace(/\/+$/, '')
+    if (feedUrl) config.feedUrl = feedUrl
+    if (modem) config.baud = modem === 'off' ? 0 : Number(modem) || config.baud
     await $.command.register({ name: 'bbs', description: 'Call lATENT sPACE, the BBS in a pane' })
     const acct = await account($)
     const lastRead = ((await $.store.get('lastRead')) ?? {}) as Record<string, number>

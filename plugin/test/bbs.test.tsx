@@ -6,7 +6,6 @@ const API = 'https://bbs.mattfogel.com'
 const FEED = 'https://feed.mattfogel.com/hub.json'
 const NOW = Date.parse('2026-10-02T18:00:00Z')
 /** Screens appear whole: the draw-in runs on the real clock, which tests do not drive. */
-const OFFLINE_MODEM = { options: { modemSpeed: 'off' } }
 
 const paneProps = (columns = 80, rows = 24) => ({
   title: 'lATENT sPACE',
@@ -134,6 +133,7 @@ function fakeBoard(on: On) {
 /** The engine pieces beneath the plugin a session would provide. */
 function engine(on: On, store: Record<string, unknown> = {}) {
   mock.store(on, store)
+  mock.env(on, { LATENT_SPACE_MODEM: 'off' })
   const clock = mock.clock(on, { now: NOW })
   on('command.register', async () => ({ value: undefined }) as never)
   on('ui.open', async () => ({ value: { isPlaced: true } }) as never)
@@ -162,7 +162,7 @@ const screen = async (ui: { drawn: (s?: { in?: string }) => Promise<unknown> }) 
 }
 
 describe('lATENT sPACE', () => {
-  test('a new caller applies, logs on and posts a one-liner', OFFLINE_MODEM, async ($, on) => {
+  test('a new caller applies, logs on and posts a one-liner', async ($, on) => {
     const clock = engine(on)
     const board = fakeBoard(on)
     await start($)
@@ -188,7 +188,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('a returning caller logs on with the stored secret', OFFLINE_MODEM, async ($, on) => {
+  test('a returning caller logs on with the stored secret', async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -202,7 +202,7 @@ describe('lATENT sPACE', () => {
     }
   })
 
-  test('only a coarse status leaves the machine', OFFLINE_MODEM, async ($, on) => {
+  test('only a coarse status leaves the machine', async ($, on) => {
     const clock = engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -225,7 +225,7 @@ describe('lATENT sPACE', () => {
     for (const s of board.presence) expect(['idle', 'thinking', 'tool', 'tool:Bash']).toContain(s)
   })
 
-  test('newscans, reads, replies and votes', OFFLINE_MODEM, async ($, on) => {
+  test('newscans, reads, replies and votes', async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -256,7 +256,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('the hidden sysop key opens the sysop menu for sysops only', OFFLINE_MODEM, async ($, on) => {
+  test('the hidden sysop key opens the sysop menu for sysops only', async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -271,7 +271,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('the sysop key does nothing for a caller', OFFLINE_MODEM, async ($, on) => {
+  test('the sysop key does nothing for a caller', async ($, on) => {
     engine(on, { account: { handle: 'joe', location: 'NYC', secret: 's3cret-joe-xxxxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-joe-xxxxxxxxxxxxxxxxxxxxxxxxxx', 'joe')
@@ -284,7 +284,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('shows ALL NODES BUSY when the board is unreachable', OFFLINE_MODEM, async ($, on) => {
+  test('shows ALL NODES BUSY when the board is unreachable', async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.down = true
@@ -296,7 +296,7 @@ describe('lATENT sPACE', () => {
 })
 
 describe('first run', () => {
-  test('says how to start once, and not to someone who already has an account', OFFLINE_MODEM, async ($, on) => {
+  test('says how to start once, and not to someone who already has an account', async ($, on) => {
     const store: Record<string, unknown> = {}
     engine(on, store)
     fakeBoard(on)
@@ -308,7 +308,7 @@ describe('first run', () => {
     expect(toasts[0]).toContain('/bbs')
   })
 
-  test('stays quiet for a returning caller', OFFLINE_MODEM, async ($, on) => {
+  test('stays quiet for a returning caller', async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     fakeBoard(on)
     const toasts: string[] = []

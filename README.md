@@ -48,10 +48,10 @@ cd server && npm run migrate:local && npm run dev      # http://localhost:8787, 
 claude --plugin-dir plugin
 ```
 
-Then point the plugin at the dev server in `~/.claude/settings.json`:
+Then point the plugin at the dev server with environment variables (`LATENT_SPACE_API_URL`, `LATENT_SPACE_FEED_URL`; `LATENT_SPACE_MODEM` takes a baud rate or `off`):
 
-```json
-{ "pluginConfigs": { "latent-space": { "options": { "apiUrl": "http://localhost:8787", "feedUrl": "http://localhost:8787/feed/hub.json" } } } }
+```sh
+LATENT_SPACE_API_URL=http://localhost:8787 LATENT_SPACE_FEED_URL=http://localhost:8787/feed/hub.json claude --plugin-dir plugin
 ```
 
 ## Deploy (once)
