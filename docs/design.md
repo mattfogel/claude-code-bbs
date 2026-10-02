@@ -100,11 +100,11 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 ### Abuse controls (minimal, for launch)
 
 - **Proof of work on `/register`:**
-  - The client finds a nonce such that `sha256(handle + ":" + nonce)` has N leading zero bits. Start with N≈20, about 1–2 s.
+  - The client finds a nonce such that `sha256(lowercase(handle) + ":" + nonce)` has N leading zero bits. N=16 (`LIMITS.powBits`, server `POW_BITS`): measured at about 2 s in the mod environment, where 18 bits took over 10 s.
   - The server checks it with a single hash, which fits the 10 ms CPU limit.
   - `crypto.subtle.digest` is available in the mod.
 - **Limits:**
-  - Registrations: 3 per IP per day, via the Rate Limiting binding.
+  - Registrations: 3 per IP per day, counted by the Hub against a hash of the IP. The Rate Limiting binding was dropped because it only supports 10 s or 60 s periods.
   - New accounts are read-only for 10 minutes.
   - One-liners and rumors: 1 per 60 s per user, and 20 per day. These are exact token buckets in the Hub's SQLite.
 - **Sanitizing:**
@@ -131,13 +131,14 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 
 ### Rendering
 
-- **Screen:** a `Client` surface module holds the screen buffer (width = pane `bodyColumns`, capped at 80; target art width about 60) and draws it as a `Raster`.
-  - Each cell is `[codePoint, fg, bg]` using the VGA 16-color palette as truecolor.
+- **Screen:** a `Client` surface module (`client/term.tsx`) holds the local UI state and draws it. Width is the pane's `bodyColumns`, capped at 80.
+  - A Client module's element table has no `Raster` (`ClientElements` omits it), so each row is a `Text` of nested `Text` runs. A run is a stretch of cells with one VGA color pair, drawn as truecolor `color`/`backgroundColor`. As a side effect, the board also works on the desktop surface.
   - CP437 glyphs are stored as their Unicode equivalents.
-- **Text renderer:** in `shared/pipe.ts`, it parses `|00`–`|15` foreground and `|16`–`|23` background codes, plus `%XX` MCI fields from a context object (`%UN`, `%LO`, `%BN`, `%DT`, `%TM`, `%NN`, …), into cells. It's shared with the server so both sides validate user text the same way.
+  - `client/app.ts` is pure: `press(state, key, view)` returns the next state and an optional Action, and `draw(state, view, w, h)` returns exactly `h` pipe-coded lines. It's tested under plain Node.
+- **Text renderer:** in `plugin/shared/pipe.ts`, it parses `|00`–`|15` foreground and `|16`–`|23` background codes, plus `%XX` MCI fields from a context object (`%UN`, `%LO`, `%BN`, `%DT`, `%TM`, `%NN`, …), into cells. It's shared with the server so both sides validate user text the same way.
 - **Input:** `surface.onKey` drives hotkeys, the lightbar and a one-line editor for one-liners and rumors.
 - **Messages:** the Client module `post()`s actions to the hooks module (`ui.message`), which does the `$.http.fetch` calls and updates `$.state`.
-- **Art:** `plugin/art/*.ans.txt` files are original art written with pipe codes rather than raw ANSI escape codes, because escape codes are refused in text and pipe codes diff cleanly. The matrix logo is a gradient "lATeNt sPaCE" in half-block/shade characters, about 60 columns wide.
+- **Art:** original and pipe-coded, because escape codes are refused in text and pipe codes diff cleanly. A mod loads only code files, so art lives in TS modules. The matrix logo (`client/logo.ts`) is "LATENT SPACE" in a 4×5 pixel font, drawn with half blocks in a `|15 |13 |05` gradient, 59 columns wide. Below that width it falls back to a one-line title. `bun scripts/screens.ts [w] [h]` prints every screen in truecolor for review.
 
 ### Where data is kept
 
@@ -151,35 +152,40 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 ### Security invariants
 
 1. BBS content is **never** passed into the model context: no `prompt.compose` sections, no tool results. It is drawn only in the pane.
-2. Text from the feed is sanitized again on the client before rendering. Anything that isn't printable, width-1 and in the BMP becomes `?`, as Raster requires.
+2. Text from the feed is sanitized again on the client before rendering. Anything that isn't printable, width-1 and in the BMP becomes `?`, so the grid stays aligned.
 3. Nothing about the user's work leaves the machine except the coarse status string.
 
 ## Repo layout
 
 ```
 claude-code-bbs/
-  plugin/                     # the mod
-    .claude-plugin/plugin.json   # name "latent-space"
+  plugin/                        # the mod (self-contained: installs copy only this folder)
+    .claude-plugin/plugin.json   # name "latent-space", userConfig apiUrl/feedUrl
     hooks/hooks.json             # { "modules": ["./register.tsx"] }
-    hooks/register.tsx           # /bbs command, pane, turn/tool hooks, fetch + poll loop
-    client/                      # Client surface module: screens, renderer, input
-    art/                         # *.ans.txt (pipe-coded)
-    types/index.d.ts             # PluginState contract
-    test/*.test.ts               # claude plugin test
+    hooks/register.tsx           # /bbs, pane, Client props, poll loop, write API, PoW, status hooks
+    client/term.tsx              # Client surface module: keys in, colored Text runs out
+    client/app.ts                # pure screen state machine + drawing
+    client/logo.ts               # generated half-block logo
+    shared/pipe.ts               # pipe/MCI parser + sanitizer (server imports it too)
+    shared/protocol.ts           # feed + API types, limits, status encoding, PoW
+    types/index.d.ts             # PluginState contract, View, Action
+    test/bbs.test.tsx            # claude plugin test: fake board, full flows
   server/
-    wrangler.jsonc               # Worker, DO bindings (Hub; Board/Mailbox later), D1, R2, ratelimits, routes
-    src/index.ts                 # router (Hono), auth, sanitize, RPC
-    src/do/hub.ts
-    migrations/0001_init.sql     # D1
-    test/*.test.ts               # @cloudflare/vitest-pool-workers
-  shared/
-    protocol.ts                  # feed + API types
-    pipe.ts                      # pipe/MCI parser + sanitizer
+    wrangler.jsonc               # Worker, Hub DO, D1, R2, vars
+    src/index.ts                 # Hono router, auth, sanitize, moderation
+    src/hub.ts                   # Hub Durable Object
+    migrations/0001_init.sql     # D1: users, reports, modlog
+    test/api.test.ts             # @cloudflare/vitest-pool-workers
+  test/                          # Node unit tests of plugin/shared and plugin/client
+  scripts/screens.ts             # print every screen in truecolor
   docs/
 ```
 
+The shared code lives under `plugin/shared/` rather than at the top level, because an installed plugin is only its own folder. The server imports it from there.
+
 **Plugin dev loop:**
-- The engine writes the mod API types when the plugin-authoring skill loads, and `claude plugin validate plugin/` checks the mod.
+- The engine writes the mod API types into `plugin/.claude-plugin/types/` when it loads the mod (gitignored). `npm run typecheck` and `claude plugin validate plugin` check it.
+- The validator follows `$` only into functions declared at the top level of the hooks module, and state writes must name an atom directly (no generic helpers).
 - Locally, run `claude --plugin-dir plugin/` or symlink `plugin/` into the session's dev-mods folder for hot reload.
 - Run `claude plugin test plugin/`.
 
@@ -188,14 +194,16 @@ claude-code-bbs/
 ## Phases
 
 ### Phase 1: the board is live
-- [ ] `shared/pipe.ts`: pipe/MCI parser, sanitizer, tests
-- [ ] `shared/protocol.ts`: feed and API types
-- [ ] Server: D1 schema (users, bans, modlog); Worker router; `/register` (with proof of work), `/call`, `/presence`, `/oneliners`, `/rumors`, `/report`, `/mod/*`
-- [ ] Hub Durable Object: SQLite tables, token buckets, dirty flag + alarm → `hub.json` to R2
-- [ ] Cloudflare: R2 bucket + custom domain `feed.mattfogel.com` with a cache rule; Worker route `bbs.mattfogel.com`; fail-closed route
-- [ ] Plugin: `/bbs` command, pane, Client module renderer (Raster), matrix screen, new-user flow, logon sequence, main menu, one-liners, rumors, last callers, who's online, stats, status bar, BUSY mode
-- [ ] Original art: matrix logo, main menu frame, list headers and footers
-- [ ] Tests on both sides; deploy; seed with a sysop account
+- [x] `shared/pipe.ts`: pipe/MCI parser, sanitizer, tests
+- [x] `shared/protocol.ts`: feed and API types
+- [x] Server: D1 schema (users, reports, modlog); Worker router; `/register` (with proof of work), `/call`, `/presence`, `/logoff`, `/oneliners`, `/rumors`, `/report`, `/mod/{delete,ban,unban,mute,motd}`
+- [x] Hub Durable Object: SQLite tables, per-user quotas, per-IP registration quota, dirty flag + alarm → `hub.json` to R2, presence expiry
+- [ ] Cloudflare: D1 database id, R2 bucket + custom domain `feed.mattfogel.com` with a cache rule; Worker route `bbs.mattfogel.com`; fail-closed route (needs the account; see README)
+- [x] Plugin: `/bbs` command, pane, Client module renderer, matrix screen, new-user flow, logon sequence, main menu, one-liners, rumors, last callers, who's online, stats, status bar, BUSY mode
+- [x] Original art: matrix logo, menu headers and footers
+- [x] Tests: Node unit tests, Workers integration tests, `claude plugin test` flows
+- [ ] Deploy; seed with a sysop account (`UPDATE users SET role = 'sysop' WHERE handle = ...`)
+- [ ] Try it in a real fullscreen session: key focus, pane sizing, colors in light themes
 
 ### Phase 2: messages and voting
 Message conferences (one Board Durable Object each, with sponsors), newscan, Obv/2-style post headers, a line editor, a voting booth with ASCII bars, Top Ten.
@@ -206,5 +214,6 @@ Private mail (Mailbox Durable Objects, fetched through the Worker since mail is 
 ## Open questions
 
 - The exact wording of `Cache-Control` and the R2 Class B billing for cache hits needs measuring once the feed is deployed.
-- `Raster` color formats and the Client module limits are from an early-access API (Claude Code 2.1.287). Re-check `claude-code.d.ts` when work starts.
+- The Client module and Text color limits come from an early-access API (Claude Code 2.1.287). Re-check `claude-code.d.ts` after upgrades.
+- Whether hashing is faster in a pure-JS SHA-256 than with `crypto.subtle` per digest in the mod environment. If it is, the PoW could go back to 18 bits.
 - Chosen color theme for lATeNt sPaCE: the default proposal is the purple/magenta gradient `|05 |13 |15` with a `|08` frame.

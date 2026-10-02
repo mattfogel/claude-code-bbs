@@ -1,0 +1,22 @@
+{
+  "name": "latent-space",
+  "version": "0.1.0",
+  "description": "lATeNt sPaCE: a Vision-X / Oblivion/2-style BBS in a pane, one global board for everyone, to read while Claude works. Type /bbs.",
+  "author": { "name": "Matt Fogel" },
+  "repository": "https://github.com/mattfogel/claude-code-bbs",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "apiUrl": {
+      "type": "string",
+      "title": "Write API URL",
+      "description": "Where posts and logons go. Change only to run your own board.",
+      "default": "https://bbs.mattfogel.com"
+    },
+    "feedUrl": {
+      "type": "string",
+      "title": "Feed URL",
+      "description": "The public hub.json the board is read from.",
+      "default": "https://feed.mattfogel.com/hub.json"
+    }
+  }
+}
