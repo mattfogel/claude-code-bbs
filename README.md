@@ -59,7 +59,7 @@ Then point the plugin at the dev server in `~/.claude/settings.json`:
 
 ## Sysop chores
 
-There's no sysop menu in the mod yet, so these are `curl` calls with your secret: the `account.secret` value the mod keeps in its `$.store`, a JSON file of the plugin's own under your Claude Code configuration directory.
+Once your account is sysop (step 6 above), press `*` on the main menu for the sysop menu: conferences, polls, the message of the day, and ban, unban or mute. It's hidden; for everyone else `*` does nothing. The same changes as `curl` calls, with your secret (the `account.secret` value the mod keeps in its `$.store`):
 
 ```sh
 B=https://bbs.mattfogel.com/v1; A="Authorization: Bearer $SECRET"; J="content-type: application/json"

@@ -29,6 +29,8 @@ function fakeBoard(on: On) {
     down: false,
     posts: [] as { id: number; slug: string; thread: number; handle: string; to: string; subject: string; body: string; ts: string; replyTo: number | null }[],
     votes: [] as { poll: number; option: number; handle: string }[],
+    roles: new Map<string, string>(), // handle -> role
+    mod: [] as { path: string; body: unknown }[],
   }
   const iso = new Date(NOW).toISOString()
   const conferences = () =>
@@ -104,6 +106,12 @@ function fakeBoard(on: On) {
       return json(200, { node: 1 })
     }
     if (path === '/v1/logoff') return json(200, { ok: true })
+    if (path === '/v1/me') return json(200, { handle, location: 'NYC', role: board.roles.get(handle) ?? 'user', createdAt: iso })
+    if (path.startsWith('/v1/mod/')) {
+      if ((board.roles.get(handle) ?? 'user') === 'user') return json(403, { error: { code: 'forbidden', message: 'Sysops and mods only.' } })
+      board.mod.push({ path, body })
+      return json(200, { ok: true })
+    }
     if (path === '/v1/posts') {
       const id = board.posts.length + 1
       const orig = board.posts.find(p => p.id === body.replyTo)
@@ -245,6 +253,34 @@ describe('lATENT sPACE', () => {
     for (const key of ['q', 'v', '1', '2']) await ui.key({ key })
     expect(board.votes).toEqual([{ poll: 1, option: 1, handle: 'mattf' }])
     expect(await screen(ui)).toContain('Vote counted.')
+    await ui.unmount()
+  })
+
+  test('the hidden sysop key opens the sysop menu for sysops only', OFFLINE_MODEM, async ($, on) => {
+    engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
+    const board = fakeBoard(on)
+    board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
+    board.roles.set('mattf', 'sysop')
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    for (const key of ['l', 'x', '*']) await ui.key({ key })
+    expect(await screen(ui)).toContain('Sysop Menu')
+    for (const key of ['m', ...'hi all', 'return', 'y']) await ui.key({ key: key === ' ' ? 'space' : key })
+    expect(board.mod).toEqual([{ path: '/v1/mod/motd', body: { text: 'hi all' } }])
+    expect(await screen(ui)).toContain('Message of the day set.')
+    await ui.unmount()
+  })
+
+  test('the sysop key does nothing for a caller', OFFLINE_MODEM, async ($, on) => {
+    engine(on, { account: { handle: 'joe', location: 'NYC', secret: 's3cret-joe-xxxxxxxxxxxxxxxxxxxxxxxxxx' } })
+    const board = fakeBoard(on)
+    board.users.set('s3cret-joe-xxxxxxxxxxxxxxxxxxxxxxxxxx', 'joe')
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    for (const key of ['l', 'x']) await ui.key({ key })
+    const before = await screen(ui)
+    await ui.key({ key: '*' })
+    expect(await screen(ui)).toBe(before)
     await ui.unmount()
   })
 

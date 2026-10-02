@@ -54,7 +54,7 @@ export type ThreadView = {
 /** One thread with unread posts, as newscan found it. */
 export type ScanItem = { slug: string; conference: string; thread: number; subject: string; unread: number }
 
-export type Me = { handle: string; location: string; node?: number }
+export type Me = { handle: string; location: string; node?: number; role?: 'user' | 'mod' | 'sysop' }
 
 export type Notice = { id: number; text: string; isError?: boolean }
 
@@ -97,6 +97,15 @@ export type Action =
   | { type: 'newscan' }
   | { type: 'markAllRead' }
   | { type: 'vote'; poll: number; option: number }
+  | { type: 'sysop'; op: SysopOp }
+
+/** What the sysop menu asks the server to do (the /v1/mod routes). */
+export type SysopOp =
+  | { kind: 'conference'; slug: string; name: string; sponsor: string; description: string; n?: number; remove?: boolean }
+  | { kind: 'poll'; question: string; options: string[] }
+  | { kind: 'closePoll'; id: number }
+  | { kind: 'motd'; text: string }
+  | { kind: 'user'; action: 'ban' | 'unban' | 'mute'; handle: string; minutes?: number }
 
 /** Bookkeeping for the presence updates sent to the server. */
 export type Presence = { sent: string; sentAt: number; wanted: string }

@@ -73,6 +73,12 @@ export function panel(title: string, rows: string[], width: number, opts: { righ
   return shadow ? [top + ' ', ...body, bottom, ` |08${'\u2592'.repeat(width)}`] : [top, ...body, bottom]
 }
 
+/** One main-menu entry inside a panel, `width` cells, lit when selected. */
+export function panelItem(item: Item, isSel: boolean, width: number): string {
+  if (isSel) return fitPipe(`${LIGHTBAR} ${item.key.toUpperCase()}  ${item.label}`, width) + '|16'
+  return fitPipe(` |01\u2590|17|15${item.key.toUpperCase()}|16|01\u258c |07${item.label}`, width)
+}
+
 export const hotkey = (item: Item, isSel: boolean) =>
   isSel ? `${LIGHTBAR} ${item.label} |16|07` : `|08[|15${item.label[0]}|08]|07${item.label.slice(1)}`
 

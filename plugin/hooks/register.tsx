@@ -9,7 +9,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Account, Action, BoardIndex, BoardThreadFile, Feed, Presence, ScanItem, ThreadView, View } from '../types'
+import type { Account, Action, BoardIndex, BoardThreadFile, Feed, Presence, ScanItem, SysopOp, ThreadView, View } from '../types'
 import { LIMITS, boardIndexKey, boardThreadKey, describeStatus, encodeStatus, leadingZeroBits, powInput, type ClaudeStatus } from '../shared/protocol'
 
 type Dollar = EngineInterface
@@ -50,13 +50,13 @@ async function notify($: Dollar, text: string, isError = false) {
   await update($, view, (v): View => ({ ...v, notice: { id: (v.notice?.id ?? 0) + 1, text, isError } }))
 }
 
-async function api($: Dollar, path: string, body?: unknown): Promise<ApiResult> {
+async function api($: Dollar, path: string, body?: unknown, method: 'GET' | 'POST' = 'POST'): Promise<ApiResult> {
   const acct = await account($)
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (acct && path !== '/v1/register') headers.authorization = `Bearer ${acct.secret}`
   let res
   try {
-    res = await $.http.fetch(`${config.apiUrl}${path}`, { method: 'POST', headers, body: JSON.stringify(body ?? {}) })
+    res = await $.http.fetch(`${config.apiUrl}${path}`, method === 'GET' ? { headers } : { method, headers, body: JSON.stringify(body ?? {}) })
   } catch {
     await update($, view, (v): View => ({ ...v, busy: true }))
     return { ok: false, code: 'busy', message: 'ALL NODES BUSY - TRY AGAIN LATER' }
@@ -255,6 +255,38 @@ async function refreshAfterPost($: Dollar, slug: string, thread: number) {
   if (v.thread?.slug === slug && v.thread.id === thread) await loadThread($, slug, thread, undefined, true)
 }
 
+/** Carries out one sysop-menu change, then refreshes the feed once it has published. */
+async function sysop($: Dollar, op: SysopOp) {
+  let r: ApiResult
+  let done: string
+  switch (op.kind) {
+    case 'conference':
+      r = await api($, '/v1/mod/conference', { slug: op.slug, name: op.name, sponsor: op.sponsor, description: op.description, n: op.n, remove: op.remove })
+      done = op.remove ? `Conference ${op.slug} removed.` : `Conference ${op.slug} saved.`
+      break
+    case 'poll':
+      r = await api($, '/v1/mod/poll', { question: op.question, options: op.options })
+      done = 'Poll opened.'
+      break
+    case 'closePoll':
+      r = await api($, '/v1/mod/poll/close', { id: op.id })
+      done = 'Poll closed.'
+      break
+    case 'motd':
+      r = await api($, '/v1/mod/motd', { text: op.text })
+      done = 'Message of the day set.'
+      break
+    case 'user':
+      r = await api($, `/v1/mod/${op.action}`, { handle: op.handle, minutes: op.minutes })
+      done = op.action === 'mute' ? `${op.handle} muted for ${op.minutes ?? 60} min.` : `${op.handle} ${op.action === 'ban' ? 'banned' : 'unbanned'}.`
+      break
+  }
+  if (!r.ok) return void (await notify($, r.message, true))
+  await notify($, `${done} The feed shows it in a few seconds.`)
+  $.clock.after(PUBLISH_LAG_MS, () => void poll($, true))
+  $.clock.after(PUBLISH_LAG_MS * 2, () => void poll($, true))
+}
+
 async function castVote($: Dollar, pollId: number, option: number) {
   const r = await api($, '/v1/votes', { poll: pollId, option })
   if (!r.ok) return void (await notify($, r.message, true))
@@ -336,6 +368,10 @@ async function act($: Dollar, action: Action) {
       if (!r.ok) return void (await notify($, r.message, true))
       const node = Number(r.data.node)
       await update($, view, (v): View => ({ ...v, me: v.me && { ...v.me, node } }))
+      // The role decides whether the hidden sysop key does anything; the server checks it again on every call.
+      const me = await api($, '/v1/me', undefined, 'GET')
+      const role = me.ok && (me.data.role === 'sysop' || me.data.role === 'mod') ? me.data.role : 'user'
+      await update($, view, (v): View => ({ ...v, me: v.me && { ...v.me, role } }))
       const sentAt = await $.clock.now()
         await update($, presence, (q): Presence => ({ ...q, sent: 'idle', sentAt }))
       await poll($, true)
@@ -378,6 +414,9 @@ async function act($: Dollar, action: Action) {
       return
     case 'vote':
       await castVote($, action.poll, action.option)
+      return
+    case 'sysop':
+      await sysop($, action.op)
       return
   }
 }
