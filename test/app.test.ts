@@ -51,12 +51,29 @@ describe('draw', () => {
     expect(text(draw(initialState(), guest, 40, 24, NOW))).toContain('lATENT sPACE')
   })
 
-  it('puts node, handle and Claude status on the status bar', () => {
-    const last = stripPipe(draw(initialState(), member, 80, 24, NOW).at(-1)!)
-    expect(last).toContain('Node 2')
-    expect(last).toContain('mattf')
-    expect(last).toContain('Claude: running Bash')
+  it('puts node, handle, base, time left and Claude status on a two-line status bar', () => {
+    const onMain = run(initialState(), ['l', 'x'], member).state
+    const [top, bottom] = draw({ ...onMain, loggedAt: NOW - 18 * 60_000 }, member, 80, 24, NOW).slice(-2).map(stripPipe)
+    expect(top).toMatch(/lATENT sPACE │ Node 2 │ mattf │ (.* │ )?42 mins │ \d\d:\d\d/)
+    expect(bottom).toContain('Claude running Bash')
     expect(stripPipe(draw(initialState(), { ...member, busy: true }, 80, 24, NOW).at(-1)!)).toContain('ALL NODES BUSY')
+    const short = draw(onMain, member, 80, 14, NOW).map(stripPipe)
+    expect(short.at(-1)).toContain('Claude running Bash')
+    expect(short.at(-1)).toContain('Node 2')
+  })
+
+  it('prompts Obv/2 style: (handle)─(menu)─(time left)─(keys)', () => {
+    const onMain = { ...run(initialState(), ['l', 'x'], member).state, loggedAt: NOW - 5 * 60_000 }
+    expect(text(draw(onMain, member, 80, 24, NOW))).toContain('(mattf)─(Main)─(55 mins)─(Command: Messages)')
+    const narrow = text(draw(onMain, member, 40, 24, NOW))
+    expect(narrow).toContain('(Main)')
+    expect(narrow).not.toContain('(mattf)')
+  })
+
+  it('draws big block headers when there is room, and a bar when not', () => {
+    const s = { ...initialState(), screen: 'stats' as const }
+    expect(text(draw(s, member, 80, 24, NOW))).not.toContain('System Stats')
+    expect(text(draw(s, member, 80, 16, NOW))).toContain('System Stats')
   })
 
   it("describes who's online coarsely", () => {
@@ -93,15 +110,18 @@ describe('press', () => {
     const { state, actions } = run(initialState(), ['return', 'x'], member)
     expect(actions).toEqual([{ type: 'call' }])
     expect(state.screen).toBe('main')
-    expect(text(draw(state, member, 80, 24, NOW))).toContain('[Main Menu] Command:')
+    expect(text(draw(state, member, 80, 24, NOW))).toMatch(/╔═╡ Messages ╞═+╗\s+╔═╡ The Board ╞═+╗/)
   })
 
   it('moves the lightbar and opens items by hotkey', () => {
     let { state } = run(initialState(), ['l', 'x'], member)
     state = run(state, ['down', 'right'], member).state
-    expect(state.sel).toBe(3)
+    expect(state.sel).toBe(6)
     state = run(state, ['return'], member).state
-    expect(state.screen).toBe('oneliners')
+    expect(state.screen).toBe('rumors')
+    state = run({ ...state, screen: 'main', sel: 4 }, ['down'], member).state
+    expect(state.sel).toBe(10)
+    expect(run(state, ['up'], member).state.sel).toBe(4)
     state = run(state, ['q', 'w'], member).state
     expect(state.screen).toBe('who')
   })
@@ -126,5 +146,17 @@ describe('press', () => {
   it('sends a guest who wanders into a list back to the matrix', () => {
     const { state } = run(initialState(), ['w', 'q'], guest)
     expect(state.screen).toBe('matrix')
+  })
+})
+
+describe('draw-in', () => {
+  it('reveals ink cells in reading order with a cursor in front', async () => {
+    const { reveal, inkCount } = await import('../plugin/client/reveal')
+    const cell = (ch: string, bg = 0) => ({ ch, fg: 7, bg })
+    const rows = [[cell('a'), cell(' '), cell('b')], [cell(' ', 5), cell('c')]]
+    expect(inkCount(rows, 0)).toBe(4)
+    const shown = reveal(rows, 2, 0, 9).map(r => r.map(c => c.ch).join(''))
+    expect(shown).toEqual(['a b', '\u2584 '])
+    expect(reveal(rows, 99, 0, 9)).toEqual(rows)
   })
 })

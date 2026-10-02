@@ -33,7 +33,7 @@ const threads = atom({ plugin: 'latent-space', key: 'threads' } as const, {} as 
 const presence = atom({ plugin: 'latent-space', key: 'presence' } as const, { sent: '', sentAt: 0, wanted: 'idle' } as Presence)
 
 /** Set by register from the plugin's options. */
-const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json' }
+const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800 }
 
 /** A file next to hub.json on the feed (boards/<slug>/...). */
 const feedFile = (key: string) => config.feedUrl.replace(/[^/]*$/, '') + key
@@ -403,6 +403,7 @@ async function openPane($: Dollar) {
 export const register: Register = (on, options) => {
   config.apiUrl = String(options.apiUrl || config.apiUrl).replace(/\/+$/, '')
   config.feedUrl = String(options.feedUrl || config.feedUrl)
+  config.baud = options.modemSpeed === 'off' ? 0 : Number(options.modemSpeed) || config.baud
 
   // ---- hooks --------------------------------------------------------------
 
@@ -456,7 +457,7 @@ export const register: Register = (on, options) => {
     const rows = Math.max(10, e.props.scroll.bodyRows)
     return (
       <Box flexDirection="column">
-        <Client key="term" module="../client/term.tsx" props={{ view: v, columns, rows }} width={columns} height={rows} />
+        <Client key="term" module="../client/term.tsx" props={{ view: v, columns, rows, baud: config.baud }} width={columns} height={rows} />
       </Box>
     )
   })

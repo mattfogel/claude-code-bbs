@@ -106,3 +106,13 @@ describe('wrapPipe', () => {
     expect(wrapPipe('', 4)).toEqual([''])
   })
 })
+
+describe('theme', () => {
+  it('draws pipe colors through the board palette', async () => {
+    const { ACID_ICE } = await import('../plugin/client/theme')
+    const [cell] = parsePipe('|13x|21', {}, 7, 0, ACID_ICE)
+    expect(cell.fg).toBe(0x55ffff)
+    expect(parsePipe('|21x', {}, 7, 0, ACID_ICE)[0].bg).toBe(0x0000aa)
+    expect(ACID_ICE[15]).toBe(VGA[15])
+  })
+})

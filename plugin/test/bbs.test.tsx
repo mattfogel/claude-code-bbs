@@ -5,6 +5,8 @@ const PANE = 'latent-space'
 const API = 'https://bbs.mattfogel.com'
 const FEED = 'https://feed.mattfogel.com/hub.json'
 const NOW = Date.parse('2026-10-02T18:00:00Z')
+/** Screens appear whole: the draw-in runs on the real clock, which tests do not drive. */
+const OFFLINE_MODEM = { options: { modemSpeed: 'off' } }
 
 const paneProps = (columns = 80, rows = 24) => ({
   title: 'lATENT sPACE',
@@ -152,7 +154,7 @@ const screen = async (ui: { drawn: (s?: { in?: string }) => Promise<unknown> }) 
 }
 
 describe('lATENT sPACE', () => {
-  test('a new caller applies, logs on and posts a one-liner', async ($, on) => {
+  test('a new caller applies, logs on and posts a one-liner', OFFLINE_MODEM, async ($, on) => {
     const clock = engine(on)
     const board = fakeBoard(on)
     await start($)
@@ -178,7 +180,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('a returning caller logs on with the stored secret', async ($, on) => {
+  test('a returning caller logs on with the stored secret', OFFLINE_MODEM, async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -192,7 +194,7 @@ describe('lATENT sPACE', () => {
     }
   })
 
-  test('only a coarse status leaves the machine', async ($, on) => {
+  test('only a coarse status leaves the machine', OFFLINE_MODEM, async ($, on) => {
     const clock = engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -215,7 +217,7 @@ describe('lATENT sPACE', () => {
     for (const s of board.presence) expect(['idle', 'thinking', 'tool', 'tool:Bash']).toContain(s)
   })
 
-  test('newscans, reads, replies and votes', async ($, on) => {
+  test('newscans, reads, replies and votes', OFFLINE_MODEM, async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
@@ -223,7 +225,7 @@ describe('lATENT sPACE', () => {
     await start($)
     const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
     for (const key of ['l', 'x']) await ui.key({ key })
-    expect(await screen(ui)).toContain('[Main Menu]')
+    expect(await screen(ui)).toContain('(Main)')
 
     await ui.key({ key: 'n' })
     expect(await screen(ui)).toContain('1 new message in 1 thread')
@@ -246,7 +248,7 @@ describe('lATENT sPACE', () => {
     await ui.unmount()
   })
 
-  test('shows ALL NODES BUSY when the board is unreachable', async ($, on) => {
+  test('shows ALL NODES BUSY when the board is unreachable', OFFLINE_MODEM, async ($, on) => {
     engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
     const board = fakeBoard(on)
     board.down = true
