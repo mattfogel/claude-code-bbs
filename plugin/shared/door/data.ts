@@ -541,7 +541,7 @@ export const RANKS_GOOD = [
 ] as const
 
 export const RANKS_EVIL = [
-  'Drifter', 'Scrounger', 'Petty Thief', 'Pickpocket', 'Cutpurse', 'Grifter',
+  'Stray', 'Scrounger', 'Petty Thief', 'Pickpocket', 'Cutpurse', 'Grifter',
   'Fence', 'Runner', 'Gunrunner', 'Black Marketeer', 'Racketeer',
   'Hijacker', 'Brigand', 'Freebooter', 'Corsair', 'Marauder',
   'Warlord', 'Dread Corsair', 'Outlaw Baron', 'Concord\'s Bane', 'Void Tyrant',

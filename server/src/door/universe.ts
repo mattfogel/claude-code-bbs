@@ -15,6 +15,7 @@ import {
   type DoorCommand, type DoorEvent, type DoorMap, type DoorNews, type DoorReply, type DoorStateReply, type KnownDelta,
   type PortReport, type SectorView, type TraderRanking,
 } from '../../../plugin/shared/door/protocol'
+import { fill, LOG_TEMPLATES } from '../../../plugin/shared/door/text'
 import type { ApiError, ErrorCode } from '../../../plugin/shared/protocol'
 import type { Env } from '../env'
 import { bangResult, bangStep, startBang, type BangState, type Specials } from './engine/bigbang'
@@ -166,7 +167,7 @@ export class Universe extends DurableObject<Env> {
     await this.env.FEED.put(doorMapKey(this.season()), this.get('map', '{}'), { httpMetadata: { ...JSON_META, cacheControl: MAP_CACHE } })
     this.set('status', 'ready')
     this.set('day', dayNumber(Date.now()))
-    this.log('bang', `|11The Big Bang! |07Epoch ${this.season().slice(1)} begins: ${this.config().sectors} sectors.`)
+    this.log('bang', fill(LOG_TEMPLATES.epoch, { n: this.season().slice(1), sectors: this.config().sectors }))
     this.markDirtySync()
   }
 
@@ -357,7 +358,7 @@ export class Universe extends DurableObject<Env> {
     const today = dayNumber(now)
     if (this.get('day', today) >= today) return
     this.set('day', today)
-    this.log('day', `|08-=-=- ${gameDate(now)} -=-=-`)
+    this.log('day', fill(LOG_TEMPLATES.newDay, { date: gameDate(now) }))
     this.sql.exec('DELETE FROM requests WHERE day < ?', today)
     this.markDirtySync()
   }
@@ -486,7 +487,7 @@ export class Universe extends DurableObject<Env> {
     const p = newPlayer(user.id, user.handle, shipName, this.config(), now)
     p.lastSeenLog = this.sql.exec<{ id: number | null }>('SELECT MAX(id) AS id FROM log').one().id ?? 0
     const known = this.learn(p.id, [this.contents(1, p.id, now)], now)
-    this.log('join', `|10${p.name} |07takes the helm of the |11${shipName}|07.`)
+    this.log('join', fill(LOG_TEMPLATES.join, { name: p.name, ship: shipName }))
     this.savePlayer(p, now)
     this.markDirtySync()
     return this.reply(p, now, requests, [], known)
@@ -575,7 +576,7 @@ export class Universe extends DurableObject<Env> {
     if (req.op === 'buy') {
       if (!isInt(req.ship) || !name) return fail('invalid', 'Expected {op: buy, ship, name}.')
       const r = outcome(buyShip(p, req.ship, name, dayNumber(now)))
-      if (!isFail(r)) this.log('ship', `|10${p.name} |07commissions the |11${name}|07, a new ${SHIPS[req.ship].name}.`)
+      if (!isFail(r)) this.log('ship', fill(LOG_TEMPLATES.commission, { name: p.name, ship: name, class: SHIPS[req.ship].name }))
       return r
     }
     if (req.op === 'rename') return name ? outcome(renameShip(p, name)) : fail('invalid', 'Expected {op: rename, name}.')
@@ -608,7 +609,7 @@ export class Universe extends DurableObject<Env> {
     if (!text) return fail('invalid', 'Announce what?')
     if (p.credits < LAST_LIGHT.announceCost) return fail('invalid', `An announcement costs ${LAST_LIGHT.announceCost} credits.`)
     p.credits -= LAST_LIGHT.announceCost
-    this.log('announce', `|14${p.name}|07: ${text}`)
+    this.log('announce', fill(LOG_TEMPLATES.announce, { name: p.name, text }))
     this.markDirtySync()
     return { events: [{ kind: 'bought', what: 'announcement', qty: 1, cost: LAST_LIGHT.announceCost }] }
   }
