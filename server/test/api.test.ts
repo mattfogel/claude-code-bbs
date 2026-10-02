@@ -152,7 +152,7 @@ describe('logon and presence', () => {
 
 describe('moderation', () => {
   it('lets the sysop delete, ban and set the motd', async () => {
-    const sysop = await user('SysOp', { role: 'sysop' })
+    const sysop = await user('Wizop', { role: 'sysop' })
     const lamer = await user('Lamer2')
     expect((await api('/v1/mod/motd', { secret: lamer, body: { text: 'pwned' } })).status).toBe(403)
 
@@ -163,7 +163,7 @@ describe('moderation', () => {
     expect((await api('/v1/mod/ban', { secret: sysop, body: { handle: 'lamer2' } })).status).toBe(200)
     const banned = await api('/v1/me', { secret: lamer })
     expect(banned.status).toBe(403)
-    expect((await api('/v1/mod/ban', { secret: lamer, body: { handle: 'SysOp' } })).status).toBe(403)
+    expect((await api('/v1/mod/ban', { secret: lamer, body: { handle: 'Wizop' } })).status).toBe(403)
 
     expect((await api('/v1/mod/motd', { secret: sysop, body: { text: '|13welcome to |15lATENT sPACE' } })).status).toBe(200)
     const feed = await publishedFeed()
@@ -230,7 +230,7 @@ describe('message bases', () => {
   })
 
   it('lets moderators delete posts and the sysop edit conferences', async () => {
-    const sysop = await user('Root', { role: 'sysop' })
+    const sysop = await user('Tinkerer', { role: 'sysop' })
     const spammer = await user('Spammer')
     const r = (await (await api('/v1/posts', { secret: spammer, body: { conference: 'showoff', subject: 'buy', body: 'warez' } })).json()) as { id: number; thread: number }
     expect((await api('/v1/mod/delete', { secret: sysop, body: { kind: 'post', conference: 'showoff', id: r.id } })).status).toBe(200)
@@ -239,10 +239,10 @@ describe('message bases', () => {
     expect((await boardFile<BoardIndex>('showoff', 'index.json')).threads.some(t => t.id === r.thread)).toBe(false)
 
     expect((await api('/v1/mod/conference', { secret: spammer, body: { slug: 'warez', name: 'Warez' } })).status).toBe(403)
-    expect((await api('/v1/mod/conference', { secret: sysop, body: { slug: 'demoscene', name: 'Demoscene', sponsor: 'Root', n: 5 } })).status).toBe(200)
+    expect((await api('/v1/mod/conference', { secret: sysop, body: { slug: 'demoscene', name: 'Demoscene', sponsor: 'Tinkerer', n: 5 } })).status).toBe(200)
     expect((await api('/v1/mod/conference', { secret: sysop, body: { slug: 'other', name: 'Other', n: 5 } })).status).toBe(400)
     const feed = await publishedFeed()
-    expect(feed.conferences.at(-1)).toMatchObject({ n: 5, slug: 'demoscene', sponsor: 'Root' })
+    expect(feed.conferences.at(-1)).toMatchObject({ n: 5, slug: 'demoscene', sponsor: 'Tinkerer' })
     expect(feed.conferences.find(c => c.slug === 'showoff')?.posts).toBe(0)
   })
 })
@@ -267,5 +267,47 @@ describe('voting booth', () => {
     expect((await api('/v1/votes', { secret: sysop, body: { poll: id, option: 0 } })).status).toBe(409)
     poll = (await publishedFeed()).polls.find(p => p.id === id)!
     expect(poll.closed).toBe(true)
+  })
+})
+
+describe('abuse limits', () => {
+  it('reserves names that read as the board, even in look-alike spelling', async () => {
+    for (const h of ['SysOp', 'ADMIN', 'Sys_Op', 'Anthr0pic', 'C1aude']) {
+      expect((await api('/v1/register', { body: { handle: h, nonce: await solve(h) }, ip: '10.5.0.1' })).status).toBe(409)
+    }
+  })
+
+  it('counts every address in an IPv6 /64 as one', async () => {
+    for (let i = 0; i < 3; i++) {
+      const h = `Six${i}`
+      expect((await api('/v1/register', { body: { handle: h, nonce: await solve(h) }, ip: `2001:db8:1:2::${i + 1}` })).status).toBe(201)
+    }
+    const res = await api('/v1/register', { body: { handle: 'Six3', nonce: await solve('Six3') }, ip: '2001:db8:1:2:ffff::9' })
+    expect(res.status).toBe(429)
+  })
+
+  it('records a logon once per cooldown and drops a banned caller from the list', async () => {
+    const a = await user('Looper')
+    const sysop = await user('Gatekeeper', { role: 'sysop' })
+    for (let i = 0; i < 5; i++) expect((await api('/v1/call', { secret: a, body: {} })).status).toBe(200)
+    const feed = await publishedFeed()
+    expect(feed.lastCallers.filter(c => c.handle === 'Looper')).toHaveLength(1)
+    expect((await api('/v1/mod/ban', { secret: sysop, body: { handle: 'Looper' } })).status).toBe(200)
+    expect((await publishedFeed()).lastCallers.some(c => c.handle === 'Looper')).toBe(false)
+  })
+
+  it('caps reports per user and keeps one per item', async () => {
+    const a = await user('Snitch')
+    const report = (id: number) => api('/v1/report', { secret: a, body: { kind: 'oneliner', id } })
+    for (let id = 1; id <= 10; id++) expect((await report(id)).status).toBe(200)
+    expect((await report(11)).status).toBe(429)
+    const row = await env.DB.prepare("SELECT COUNT(*) AS n FROM reports WHERE kind = 'oneliner' AND item_id = 1").first<{ n: number }>()
+    expect(row?.n).toBe(1)
+  })
+
+  it('refuses an oversized body by its declared length', async () => {
+    const a = await user('Whale')
+    const res = await SELF.fetch(`${BASE}/v1/presence`, { method: 'POST', headers: { authorization: `Bearer ${a}`, 'content-type': 'application/json', 'content-length': '999999' }, body: '{}' })
+    expect([400, 413]).toContain(res.status)
   })
 })
