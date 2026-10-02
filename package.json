@@ -1,0 +1,16 @@
+{
+  "name": "claude-code-bbs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run && npm --prefix server test && claude plugin test plugin",
+    "test:unit": "vitest run",
+    "typecheck": "tsc -p plugin && npm --prefix server run typecheck",
+    "validate": "claude plugin validate plugin",
+    "screens": "bun scripts/screens.ts"
+  },
+  "devDependencies": {
+    "typescript": "~5.9",
+    "vitest": "^4.1.11"
+  }
+}
