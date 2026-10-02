@@ -294,3 +294,26 @@ describe('lATENT sPACE', () => {
     expect(await screen(ui)).toContain('ALL NODES BUSY')
   })
 })
+
+describe('first run', () => {
+  test('says how to start once, and not to someone who already has an account', OFFLINE_MODEM, async ($, on) => {
+    const store: Record<string, unknown> = {}
+    engine(on, store)
+    fakeBoard(on)
+    const toasts: string[] = []
+    on('ui.toast', async (_$, e) => (toasts.push(e.text), undefined as never))
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0]).toContain('/bbs')
+  })
+
+  test('stays quiet for a returning caller', OFFLINE_MODEM, async ($, on) => {
+    engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
+    fakeBoard(on)
+    const toasts: string[] = []
+    on('ui.toast', async (_$, e) => (toasts.push(e.text), undefined as never))
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    expect(toasts).toHaveLength(0)
+  })
+})
