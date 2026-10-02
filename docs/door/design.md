@@ -1,8 +1,8 @@
-# WARP LANES: a space-trading door for lATENT sPACE
+# HYPERPLANE: a space-trading door for lATENT sPACE
 
 A faithful mechanical replication of TradeWars 2002 as a door game on the board. Same universe shape, port economy, haggling, ships, combat, planets, citadels, corporations and NPC raiders. Every name, every line of text and all art are original. Research and sources: [research/](research/) (01 universe and economy, 02 ships and combat, 03 planets, corps and NPCs, 04 UI, licensing and clones).
 
-`WARP LANES` is a working title (see Open questions). It is one constant, `GAME.title`, in `plugin/shared/door/data.ts`.
+The name and a light ML reskin fit the board's name. The cargo is Compute, Data and Weights, seasons are called Epochs, and the raiders are the Hallucinations. Ships, stations and the space setting stay as they are. The title is one constant, `GAME.title`, in `plugin/shared/door/data.ts`.
 
 ## Goals
 
@@ -19,16 +19,18 @@ A faithful mechanical replication of TradeWars 2002 as a door game on the board.
 
 ## Renames
 
-| TW2002 | WARP LANES |
+| TW2002 | HYPERPLANE |
 |---|---|
-| Trade Wars / TW2002 | WARP LANES |
+| Trade Wars / TW2002 | HYPERPLANE |
+| Fuel Ore / Organics / Equipment | Compute / Data / Weights (same price tiers and order) |
+| A game (BigBang to BigBang) | an Epoch (`season` in code) |
 | The Federation, FedSpace, FedLaw, the Feds | The Concord, Concord Space, Concord Law, the Marshals |
 | Captain Zyrain / Admiral Nelson / Fleet Admiral Clausewitz | Marshal Ostrander / Commodore Vale / High Marshal Teague |
 | StarDock (Class 9), "Stargate Alpha I" | Drydock (Class 9), "Drydock Anchorage" |
 | Sol / Rylos / Alpha Centauri (Class 0) | Haven / Meridian / Tycho Reach |
 | Terra | Terra (generic) |
 | Hardware Emporium / Shipyards / Police HQ / Bank / Tavern / Underground / Grimy Trader | Outfitter / Shipwright / Marshal's Office / Exchange Bank / The Last Light / the Back Room / Old Sal |
-| Ferrengi, Ferrengal | the Skav, Skavhold |
+| Ferrengi, Ferrengal; Assault Trader / Battle Cruiser / Dreadnought | the Hallucinations, Overfit Prime; Glitch / Phantom / Confabulator |
 | Alien Traders | Drifters |
 | Genesis Torpedo / Atomic Detonator / Corbomite / TransWarp | Seed Torpedo / Cracker Charge / Deadman Charge / Jump Drive |
 | Ether Probe / Psychic Probe / Armid mine / Quasar Cannon | Ghost Probe / Haggle Lens / Contact mine / Mass Driver |
@@ -82,7 +84,7 @@ A typical 30-minute session runs 40 to 80 requests, so 30 daily players cost abo
 
 - **Turns regenerate continuously:** `turnsPerDay / 24` an hour, capped at `turnsPerDay` (default 250). This is lazy: the DO stores `turns` and `turnsAt` and settles the regeneration on each request. A daily reset would punish someone who plays between Claude turns. A sysop flag (`turnModel: 'daily'`) restores TW's midnight reset.
 - **The game date** is real UTC time with the year moved forward (`GAME.yearOffset`, default +300). One real day is one game day.
-- **Extern** (daily maintenance) runs lazily, on the first request after 00:00 UTC, in steps on the alarm. It handles Concord towing, repossessing empty ships in Concord Space, clearing the space lanes, planet production and growth, citadel construction, treasury interest, Terra's colonist regrowth, Skav regeneration, cloak failure, clearing busts, decaying radiation and deleting inactive players. Ports regenerate lazily per port, as in the research (5% of capacity a day, capped per visit).
+- **Extern** (daily maintenance) runs lazily, on the first request after 00:00 UTC, in steps on the alarm. It handles Concord towing, repossessing empty ships in Concord Space, clearing the space lanes, planet production and growth, citadel construction, treasury interest, Terra's colonist regrowth, Hallucination regeneration, cloak failure, clearing busts, decaying radiation and deleting inactive players. Ports regenerate lazily per port, as in the research (5% of capacity a day, capped per visit).
 
 ## Rules (by area)
 
@@ -133,7 +135,7 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 - **Move:** typing a sector number or `M` moves you. An adjacent target is one hop.
   - Otherwise the client plots locally and shows `The shortest path (7 hops, 21 turns) from sector 123 to 456 is: …`, then asks `Engage the autopilot? (Y/N/Express) [Y]`.
   - The move request carries the whole path and a mode.
-  - The server walks it hop by hop and stops at the first interrupt: hostile fighters, mines, a toll, NavHaz damage, a Mass Driver, a Skav, out of turns, or (Alert mode) a port, planet or trader.
+  - The server walks it hop by hop and stops at the first interrupt: hostile fighters, mines, a toll, NavHaz damage, a Mass Driver, a Hallucination, out of turns, or (Alert mode) a port, planet or trader.
   - The reply lists every hop's events for the client to print as the classic scrolling autopilot.
 - **Hostile sector entry order:** NavHaz, limpet, contact mines (50% of a sector's mines detonate, 20 damage each), planet Mass Drivers (sector shot), then fighters (offensive, defensive or toll).
 - **Scanners:**
@@ -219,25 +221,25 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 - **Rankings:** corps are ranked by experience.
 
 ### NPCs (research 03 §8)
-- **The Skav** (raiders):
-  - Up to 40 ships (Raider / Reaver / Warhulk by population slot), home Skavhold in a dead end.
+- **The Hallucinations** (raiders):
+  - Up to 40 ships (Raider / Reaver / Warhulk by population slot), home Overfit Prime in a dead end.
   - They move on the alarm: one step each per tick while any player was active in the last hour, and one step per player command with chance 1 in 20.
-  - They demand surrender. Surrendering costs cargo or credits and buys peace for the day. Fighting back creates a grudge (3 per Skav ship).
-  - They size their attack to your fighter count, rob ports and trade pairs, and regenerate from Skavhold unless you hold its sector.
+  - They demand surrender. Surrendering costs cargo or credits and buys peace for the day. Fighting back creates a grudge (3 per Hallucination ship).
+  - They size their attack to your fighter count, rob ports and trade pairs, and regenerate from Overfit Prime unless you hold its sector.
 - **Drifters:** up to 50 traders with experience and alignment who trade port pairs. Killing one is like killing a player.
 - **The Marshals:** three indestructible patrol ships. They won't enter sectors with fighters, defend protected players, and destroy an evil pilot flying the Marshal's Cruiser.
 
 ### Communications and the daily log (research 03 §9)
-- **The daily log** (`news.json`, 800 lines): announcements, ships destroyed and podded, planets created, cracked or captured, ports destroyed or built, corps formed, Skav raids, extern events. Players see the lines since their last visit on entry.
+- **The daily log** (`news.json`, 800 lines): announcements, ships destroyed and podded, planets created, cracked or captured, ports destroyed or built, corps formed, Hallucination raids, extern events. Players see the lines since their last visit on entry.
 - **Messages:**
   - Hails (private messages, delivered to a mailbox in the DO, shown in the next state reply).
   - A Concord comm channel (public, carried in `news.json` with the last 50 lines).
   - Corp memos.
-- **Rankings and the V screen** (`news.json`): top traders by experience and by net worth, top corps, and game status (age, sectors, ports, planets, traders and % good, Skav count, and the Drydock sector if `config.showDrydock`).
+- **Rankings and the V screen** (`news.json`): top traders by experience and by net worth, top corps, and game status (age, sectors, ports, planets, traders and % good, Hallucination count, and the Drydock sector if `config.showDrydock`).
 
 ## Screens (client/door)
 
-- **Title:** original block-letter art for the title, a starfield, and `[E]nter the lanes  [I]nstructions  [L]og (today)  [R]ankings  [Q]uit`. It is reached from the main menu's new `[D]oors` entry, which lists doors with WARP LANES first.
+- **Title:** original block-letter art for the title, a starfield, and `[E]nter the lanes  [I]nstructions  [L]og (today)  [R]ankings  [Q]uit`. It is reached from the main menu's new `[D]oors` entry, which lists doors with HYPERPLANE first.
 - **New character:** ship name (30 characters). The trader name is the BBS handle.
 - **Main view:** the transcript scrolls. The bottom three rows are the prompt `Command [T=187]:[3554] (?=Help)? :`, a quick-stats bar (`Sect 3554│Turns 187│Creds 2,412│Figs 30│Shlds 0│Hlds 20│Ore 0│Org 20│Equ 0`) and the BBS status bar. Colors follow the TW convention: green labels, cyan data, yellow numbers, red for danger and unknown.
 - **Sub-prompts:** the computer, a port dock, the Drydock and each of its venues, a planet, a citadel and the corp menu each have their own prompt line and keymap, like the original.
@@ -248,7 +250,7 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 1. **Core (this build):** Big Bang; `map.json`; state; movement and autopilot; the sector display; density and holo scans; the computer (plotter, port reports, known universe, avoids, ship catalog, rank tables); docking, the haggle and trade experience; Class 0 purchases; the Drydock Shipwright, Outfitter (scanners, probes, beacons), Exchange Bank and Last Light announcements; turns; ranks and alignment; the daily log and rankings; the V screen; the title and new character screens; and the door entry on the main menu.
 2. **Conflict:** ship vs ship combat, pods and death, fighters and modes, contact mines and limpets, mine disruptors, Concord Space protection and the Marshals, rob and steal, the Marshal's Office and the Back Room, bounties, Deadman Charges, beacons.
 3. **Planets:** Seed Torpedoes, Terra colonists, production, citadels 1 to 6, Mass Drivers, planetary shields, interdictor, transporter, planetary jump, Cracker Charges, invading, planetary trade, port construction and upgrades.
-4. **Society and NPCs:** corporations, the Skav, Drifters, hails, mail and comm, photons, cloaks, Jump Drives, tow, the Haggle Lens, inactive deletion.
+4. **Society and NPCs:** corporations, the Hallucinations, Drifters, hails, mail and comm, photons, cloaks, Jump Drives, tow, the Haggle Lens, inactive deletion.
 5. **Seasons:** tournament settings, a season end and hall of fame, trade-route macros, and an optional Claude tie-in (a few capped bonus turns per day for finished Claude turns, sending only a count).
 
 ## Testing
@@ -259,7 +261,6 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 
 ## Open questions
 
-1. **Title.** `WARP LANES` is a placeholder. Alternatives: `VOID HAUL`, `LONGHAUL '26`, `DEEP LANES`.
-2. **Turns.** Continuous regeneration (default, 250 a day, capped) or TW's daily reset?
-3. **Universe size for season 1.** 1000 sectors (TW default) or smaller (500) while the player base is small?
-4. **Showing the Drydock's sector on the V screen.** TW's default is to show it; hiding it makes finding it part of the game.
+1. **Turns.** Continuous regeneration (default, 250 a day, capped) or TW's daily reset?
+2. **Universe size for Epoch 1.** 1000 sectors (TW default) or smaller (500) while the player base is small?
+3. **Showing the Drydock's sector on the V screen.** TW's default is to show it; hiding it makes finding it part of the game.
