@@ -148,6 +148,7 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 - **Screen:** a `Client` surface module (`client/term.tsx`) holds the local UI state and draws it. Width is the pane's `bodyColumns`, capped at 80.
   - A Client module's element table has no `Raster` (`ClientElements` omits it), so each row is a `Text` of nested `Text` runs. A run is a stretch of cells with one VGA color pair, drawn as truecolor `color`/`backgroundColor`. As a side effect, the board also works on the desktop surface.
   - CP437 glyphs are stored as their Unicode equivalents.
+  - **Palette:** screens write VGA color numbers. `client/theme.ts` reprograms the 16 registers into the board's palette, ACiD Ice (cyan `|13`, deep-blue `|05` and lightbar, blue-grey `|08` frames), and `term.tsx` draws through it. That includes users' own pipe colors, as on a DOS board. `bun scripts/palettes.ts` renders the screens in other candidate palettes.
   - `client/app.ts` is pure: `press(state, key, view)` returns the next state and an optional Action, and `draw(state, view, w, h)` returns exactly `h` pipe-coded lines. It's tested under plain Node.
 - **Text renderer:** in `plugin/shared/pipe.ts`, it parses `|00`–`|15` foreground and `|16`–`|23` background codes, plus `%XX` MCI fields from a context object (`%UN`, `%LO`, `%BN`, `%DT`, `%TM`, `%NN`, …), into cells. It's shared with the server so both sides validate user text the same way.
 - **Input:** `surface.onKey` drives hotkeys, the lightbar and a one-line editor for one-liners and rumors.
@@ -239,4 +240,4 @@ Private mail (Mailbox Durable Objects, fetched through the Worker since mail is 
 - The exact wording of `Cache-Control` and the R2 Class B billing for cache hits needs measuring once the feed is deployed.
 - The Client module and Text color limits come from an early-access API (Claude Code 2.1.287). Re-check `claude-code.d.ts` after upgrades.
 - Whether hashing is faster in a pure-JS SHA-256 than with `crypto.subtle` per digest in the mod environment. If it is, the PoW could go back to 18 bits.
-- Chosen color theme for lATENT sPACE: the default proposal is the purple/magenta gradient `|05 |13 |15` with a `|08` frame.
+

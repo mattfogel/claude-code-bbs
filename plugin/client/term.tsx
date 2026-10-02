@@ -7,6 +7,7 @@ import type { ClientModule } from 'claude-code'
 import type { View } from '../types'
 import { parsePipe } from '../shared/pipe'
 import { draw, initialState, press, type AppState } from './app'
+import { THEME } from './theme'
 
 export type TermProps = { view: View; columns: number; rows: number }
 type Local = { app: AppState; now: number }
@@ -16,7 +17,7 @@ const hex = (n: number) => '#' + n.toString(16).padStart(6, '0')
 /** Consecutive cells of one color pair, as one string. */
 export function runs(line: string): { text: string; fg: number; bg: number }[] {
   const out: { text: string; fg: number; bg: number }[] = []
-  for (const cell of parsePipe(line)) {
+  for (const cell of parsePipe(line, {}, 7, 0, THEME)) {
     const last = out[out.length - 1]
     if (last && last.fg === cell.fg && last.bg === cell.bg) last.text += cell.ch
     else out.push({ text: cell.ch, fg: cell.fg, bg: cell.bg })

@@ -55,11 +55,12 @@ function isWide(c: number): boolean {
  * Parses pipe-coded text into cells. `%XX` fields are replaced from `ctx`
  * (unknown fields are kept literally); substituted values are not themselves
  * parsed for codes. Characters that are not one cell wide become `?`.
+ * `palette` maps the 16 color numbers to RGB (the board's theme).
  */
-export function parsePipe(text: string, ctx: MciContext = {}, fg = 7, bg = 0): Cell[] {
+export function parsePipe(text: string, ctx: MciContext = {}, fg = 7, bg = 0, palette: readonly number[] = VGA): Cell[] {
   const out: Cell[] = []
   const push = (s: string) => {
-    for (const ch of s) out.push({ ch: isCellChar(ch) ? ch : '?', fg: VGA[fg], bg: VGA[bg] })
+    for (const ch of s) out.push({ ch: isCellChar(ch) ? ch : '?', fg: palette[fg], bg: palette[bg] })
   }
   let i = 0
   while (i < text.length) {
