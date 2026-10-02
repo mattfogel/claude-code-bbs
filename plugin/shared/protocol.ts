@@ -23,6 +23,32 @@ export const LIMITS = {
   presenceTtlSec: 600,
   /** Leading zero bits the registration proof of work needs. */
   powBits: 16,
+
+  // Message bases (phase 2)
+  subjectMax: 40,
+  /** Characters in a post body, newlines included. */
+  bodyMax: 4000,
+  bodyLines: 100,
+  /** Cells per body line; longer lines are wrapped by the editor and the reader. */
+  bodyWidth: 76,
+  /** Seconds between posts from one user, across all conferences. */
+  messageCooldownSec: 30,
+  messagesPerDay: 20,
+  /** Threads listed in a conference's index.json, most recently active first. */
+  indexThreads: 60,
+  /** Posts kept in one thread file; a longer thread keeps its newest. */
+  threadPosts: 200,
+  conferenceSlugMax: 16,
+  conferenceNameMax: 24,
+
+  // Voting booth
+  pollQuestionMax: 70,
+  pollOptionMax: 40,
+  pollOptionsMin: 2,
+  pollOptionsMax: 8,
+  /** Polls in hub.json: every open one, then the newest closed ones up to this. */
+  feedPolls: 6,
+  topTen: 10,
 } as const
 
 /** Handles: letters, digits, space, `_`, `-`, `.`; must start with a letter or digit. */
@@ -83,8 +109,80 @@ export type HubFeed = {
   rumors: FeedRumor[]
   lastCallers: FeedCaller[]
   nodes: FeedNode[]
-  stats: { users: number; callsToday: number; callsTotal: number; onelinersTotal: number }
+  stats: { users: number; callsToday: number; callsTotal: number; onelinersTotal: number; postsTotal: number }
+  conferences: FeedConference[]
+  polls: FeedPoll[]
+  top: TopTen
 }
+
+/** A message base. `n` is its number on the base-change screen. */
+export type FeedConference = {
+  n: number
+  slug: string
+  name: string
+  sponsor: string
+  description: string
+  posts: number
+  /** The newest post's id in this conference (ids grow per conference), 0 when empty. */
+  lastPostId: number
+  lastPostAt: string | null
+}
+
+export type FeedPoll = { id: number; question: string; options: { text: string; votes: number }[]; total: number; closed: boolean; createdAt: string }
+
+export type TopEntry = { handle: string; n: number }
+export type TopTen = { posters: TopEntry[]; callers: TopEntry[]; oneliners: TopEntry[] }
+
+// ---------------------------------------------------------------------------
+// Message bases: boards/<slug>/index.json and boards/<slug>/threads/<id>.json,
+// published to R2 by each conference's Board Durable Object.
+
+export type BoardThread = {
+  id: number
+  subject: string
+  handle: string
+  createdAt: string
+  posts: number
+  lastPostId: number
+  lastPostAt: string
+  lastHandle: string
+}
+
+export type BoardIndex = {
+  v: typeof PROTOCOL_VERSION
+  slug: string
+  seq: number
+  generatedAt: string
+  /** Most recently active first, at most LIMITS.indexThreads. */
+  threads: BoardThread[]
+  threadsTotal: number
+}
+
+export type BoardPost = {
+  id: number
+  /** 1-based position in the thread: "Msg n of posts". */
+  n: number
+  handle: string
+  to: string
+  subject: string
+  body: string
+  ts: string
+  replyTo: number | null
+}
+
+export type BoardThreadFile = {
+  v: typeof PROTOCOL_VERSION
+  slug: string
+  id: number
+  subject: string
+  /** Posts in the whole thread; `posts` holds the newest LIMITS.threadPosts. */
+  total: number
+  posts: BoardPost[]
+}
+
+export const boardIndexKey = (slug: string) => `boards/${slug}/index.json`
+export const boardThreadKey = (slug: string, id: number) => `boards/${slug}/threads/${id}.json`
+export const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,15}$/
 
 // ---------------------------------------------------------------------------
 // The write API.
@@ -94,15 +192,21 @@ export type RegisterResponse = { handle: string; secret: string }
 export type CallResponse = { node: number }
 export type PresenceRequest = { status: string }
 export type TextRequest = { text: string }
-export type ReportRequest = { kind: 'oneliner' | 'rumor'; id: number; reason?: string }
-export type ModDeleteRequest = { kind: 'oneliner' | 'rumor'; id: number }
+export type ItemKind = 'oneliner' | 'rumor' | 'post'
+export type ReportRequest = { kind: ItemKind; id: number; conference?: string; reason?: string }
+export type ModDeleteRequest = { kind: ItemKind; id: number; conference?: string }
 export type ModUserRequest = { handle: string; minutes?: number }
 export type ModMotdRequest = { text: string }
+export type PostRequest = { conference: string; subject?: string; to?: string; body: string; replyTo?: number; thread?: number }
+export type PostResponse = { id: number; thread: number }
+export type VoteRequest = { poll: number; option: number }
+export type ModPollRequest = { question: string; options: string[] }
+export type ModConferenceRequest = { slug: string; name: string; sponsor?: string; description?: string; n?: number; remove?: boolean }
 export type MeResponse = { handle: string; location: string; role: Role; createdAt: string }
 
 export type Role = 'user' | 'mod' | 'sysop'
 
-export type ErrorCode = 'rate_limited' | 'banned' | 'muted' | 'cooldown' | 'invalid' | 'taken' | 'unauthorized' | 'forbidden' | 'not_found' | 'busy'
+export type ErrorCode = 'rate_limited' | 'banned' | 'muted' | 'cooldown' | 'invalid' | 'taken' | 'unauthorized' | 'forbidden' | 'not_found' | 'busy' | 'closed'
 export type ApiError = { error: { code: ErrorCode; message: string } }
 
 // ---------------------------------------------------------------------------

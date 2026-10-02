@@ -1,7 +1,7 @@
 import { SELF, applyD1Migrations, env, runDurableObjectAlarm } from 'cloudflare:test'
 import { beforeAll, describe, expect, it } from 'vitest'
 
-import { leadingZeroBits, powInput, type HubFeed } from '../../plugin/shared/protocol'
+import { leadingZeroBits, powInput, type BoardIndex, type BoardThreadFile, type HubFeed } from '../../plugin/shared/protocol'
 
 const BITS = Number(env.POW_BITS)
 const BASE = 'https://bbs.test'
@@ -172,5 +172,100 @@ describe('moderation', () => {
 
     const log = await env.DB.prepare('SELECT action FROM modlog ORDER BY id').all<{ action: string }>()
     expect(log.results.map(r => r.action)).toEqual(['delete', 'ban', 'motd'])
+  })
+})
+
+async function boardFile<T>(slug: string, path: string): Promise<T> {
+  await runDurableObjectAlarm(env.BOARD.get(env.BOARD.idFromName(slug)))
+  const res = await SELF.fetch(`${BASE}/feed/boards/${slug}/${path}`)
+  expect(res.status).toBe(200)
+  return res.json()
+}
+
+describe('message bases', () => {
+  it('starts with the default conferences', async () => {
+    const feed = await publishedFeed()
+    expect(feed.conferences.map(c => c.slug)).toEqual(['general', 'claude', 'showoff', 'sysop'])
+    expect(feed.conferences[0]).toMatchObject({ n: 1, name: 'General', sponsor: 'SysOp', posts: 0, lastPostId: 0 })
+  })
+
+  it('posts threads and replies, publishes them, and counts them', async () => {
+    const a = await user('Razor')
+    const b = await user('Blade')
+    const first = await api('/v1/posts', { secret: a, body: { conference: 'general', subject: 'first post', body: '  hello\r\n\r\n\r\n|12world\u001b[2J  ' } })
+    expect(first.status).toBe(200)
+    const { id, thread } = (await first.json()) as { id: number; thread: number }
+
+    // Cooldown across conferences.
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'claude', subject: 'x', body: 'y' } })).status).toBe(429)
+
+    const reply = await api('/v1/posts', { secret: b, body: { conference: 'general', body: 'hi back', replyTo: id } })
+    expect(reply.status).toBe(200)
+    expect(((await reply.json()) as { thread: number }).thread).toBe(thread)
+
+    const index = await boardFile<BoardIndex>('general', 'index.json')
+    expect(index.threads[0]).toMatchObject({ id: thread, subject: 'first post', handle: 'Razor', posts: 2, lastHandle: 'Blade' })
+
+    const file = await boardFile<BoardThreadFile>('general', `threads/${thread}.json`)
+    expect(file.posts.map(p => [p.n, p.handle, p.to, p.subject])).toEqual([
+      [1, 'Razor', 'All', 'first post'],
+      [2, 'Blade', 'Razor', 'Re: first post'],
+    ])
+    expect(file.posts[0].body).toBe('  hello\n\n|12world')
+
+    const feed = await publishedFeed()
+    const general = feed.conferences.find(c => c.slug === 'general')!
+    expect(general.posts).toBe(2)
+    expect(general.lastPostId).toBe(file.posts[1].id)
+    expect(feed.top.posters.map(t => t.handle)).toEqual(expect.arrayContaining(['Razor', 'Blade']))
+  })
+
+  it('refuses bad posts', async () => {
+    const a = await user('Edge')
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'nope', subject: 's', body: 'b' } })).status).toBe(404)
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'general', body: 'no subject' } })).status).toBe(400)
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'general', subject: 's', body: ' \n ' } })).status).toBe(400)
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'general', subject: 's', to: '<bad>', body: 'b' } })).status).toBe(400)
+    expect((await api('/v1/posts', { secret: a, body: { conference: 'general', body: 'b', replyTo: 999999 } })).status).toBe(404)
+  })
+
+  it('lets moderators delete posts and the sysop edit conferences', async () => {
+    const sysop = await user('Root', { role: 'sysop' })
+    const spammer = await user('Spammer')
+    const r = (await (await api('/v1/posts', { secret: spammer, body: { conference: 'showoff', subject: 'buy', body: 'warez' } })).json()) as { id: number; thread: number }
+    expect((await api('/v1/mod/delete', { secret: sysop, body: { kind: 'post', conference: 'showoff', id: r.id } })).status).toBe(200)
+    await runDurableObjectAlarm(env.BOARD.get(env.BOARD.idFromName('showoff')))
+    expect((await SELF.fetch(`${BASE}/feed/boards/showoff/threads/${r.thread}.json`)).status).toBe(404)
+    expect((await boardFile<BoardIndex>('showoff', 'index.json')).threads.some(t => t.id === r.thread)).toBe(false)
+
+    expect((await api('/v1/mod/conference', { secret: spammer, body: { slug: 'warez', name: 'Warez' } })).status).toBe(403)
+    expect((await api('/v1/mod/conference', { secret: sysop, body: { slug: 'demoscene', name: 'Demoscene', sponsor: 'Root', n: 5 } })).status).toBe(200)
+    expect((await api('/v1/mod/conference', { secret: sysop, body: { slug: 'other', name: 'Other', n: 5 } })).status).toBe(400)
+    const feed = await publishedFeed()
+    expect(feed.conferences.at(-1)).toMatchObject({ n: 5, slug: 'demoscene', sponsor: 'Root' })
+    expect(feed.conferences.find(c => c.slug === 'showoff')?.posts).toBe(0)
+  })
+})
+
+describe('voting booth', () => {
+  it('runs a poll: one vote each, results in the feed, closed polls refuse votes', async () => {
+    const sysop = await user('Votemaster', { role: 'sysop' })
+    const a = await user('Voter A')
+    const b = await user('Voter B')
+    expect((await api('/v1/mod/poll', { secret: sysop, body: { question: 'Best modem?', options: ['14.4'] } })).status).toBe(400)
+    const { id } = (await (await api('/v1/mod/poll', { secret: sysop, body: { question: 'Best modem?', options: ['14.4', '28.8', 'US Robotics', ''] } })).json()) as { id: number }
+    expect((await api('/v1/votes', { secret: a, body: { poll: id, option: 2 } })).status).toBe(200)
+    expect((await api('/v1/votes', { secret: a, body: { poll: id, option: 1 } })).status).toBe(400)
+    expect((await api('/v1/votes', { secret: b, body: { poll: id, option: 9 } })).status).toBe(400)
+    expect((await api('/v1/votes', { secret: b, body: { poll: id, option: 2 } })).status).toBe(200)
+
+    let poll = (await publishedFeed()).polls.find(p => p.id === id)!
+    expect(poll.options.map(o => o.votes)).toEqual([0, 0, 2])
+    expect(poll).toMatchObject({ total: 2, closed: false })
+
+    expect((await api('/v1/mod/poll/close', { secret: sysop, body: { id } })).status).toBe(200)
+    expect((await api('/v1/votes', { secret: sysop, body: { poll: id, option: 0 } })).status).toBe(409)
+    poll = (await publishedFeed()).polls.find(p => p.id === id)!
+    expect(poll.closed).toBe(true)
   })
 })
