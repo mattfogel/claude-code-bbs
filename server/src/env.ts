@@ -1,7 +1,9 @@
+import type { Board } from './board'
 import type { Hub } from './hub'
 
 export interface Env {
   HUB: DurableObjectNamespace<Hub>
+  BOARD: DurableObjectNamespace<Board>
   DB: D1Database
   FEED: R2Bucket
   /** "1" serves GET /feed/* from R2 through the Worker (dev and tests). */

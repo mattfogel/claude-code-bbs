@@ -115,12 +115,7 @@ function charClass(...ranges: [number, number][]): RegExp {
  * Returns '' when nothing visible remains.
  */
 export function sanitizeUserText(raw: string, maxVisible: number): string {
-  let s = String(raw).normalize('NFC')
-  s = s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '') // CSI sequences, before ESC itself goes
-  s = s.replace(FORBIDDEN, ' ')
-  s = s.replace(/\|([0-9]{2})/g, (m, n) => (Number(n) >= 1 && Number(n) <= 15 ? m : ''))
-  s = s.replace(/\|[A-Za-z][A-Za-z0-9]/g, '') // |MN, |U1 and other prompt MCIs
-  s = s.replace(/%[A-Z]{2}/g, '')
+  let s = cleanCodes(String(raw).normalize('NFC'))
   s = s.replace(/\s+/g, ' ').trim()
   // Cut to maxVisible cells, keeping codes that precede kept characters.
   let out = ''
@@ -139,6 +134,101 @@ export function sanitizeUserText(raw: string, maxVisible: number): string {
   }
   out = out.replace(/(\|[0-9]{2})+$/, '').trim()
   return visibleLength(out) === 0 ? '' : out
+}
+
+/** The rules every piece of user text goes through, whitespace aside. */
+function cleanCodes(s: string): string {
+  s = s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '') // CSI sequences, before ESC itself goes
+  s = s.replace(FORBIDDEN, ' ')
+  s = s.replace(/\|([0-9]{2})/g, (m, n) => (Number(n) >= 1 && Number(n) <= 15 ? m : ''))
+  s = s.replace(/\|[A-Za-z][A-Za-z0-9]/g, '') // |MN, |U1 and other prompt MCIs
+  return s.replace(/%[A-Z]{2}/g, '')
+}
+
+/**
+ * Cleans a multi-line post body by the same rules as sanitizeUserText, but
+ * keeps each line's own spacing (ASCII art, quotes, indentation). Trailing
+ * spaces go, runs of blank lines fold to one, and the body is cut to
+ * `maxLines` lines and `maxChars` characters. Returns '' when nothing is visible.
+ */
+export function sanitizeUserBody(raw: string, maxChars: number, maxLines: number): string {
+  const lines = String(raw)
+    .normalize('NFC')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\t/g, '  ')
+    .split('\n')
+    .map(line => cleanCodes(line).replace(/(\|[0-9]{2})+\s*$/, '').trimEnd())
+  const out: string[] = []
+  for (const line of lines) {
+    const blank = stripPipe(line).trim() === ''
+    if (blank && (out.length === 0 || out[out.length - 1] === '')) continue
+    out.push(blank ? '' : line)
+  }
+  while (out.length && out[out.length - 1] === '') out.pop()
+  let body = out.slice(0, maxLines).join('\n')
+  if (body.length > maxChars) body = body.slice(0, maxChars).replace(/\|[0-9]?$/, '').trimEnd()
+  return stripPipe(body).trim() ? body : ''
+}
+
+/**
+ * Word-wraps one pipe-coded line to `width` cells. Each continuation line
+ * starts with the color code in force where it begins, so lines can be
+ * drawn on their own. Words longer than `width` are split.
+ */
+export function wrapPipe(line: string, width: number): string[] {
+  const w = Math.max(1, width)
+  const out: string[] = []
+  let cur = ''
+  let curLen = 0
+  let color = ''
+  let lineColor = ''
+  let breakAt = -1 // index in `cur` just after the last space
+  let breakLen = 0
+  let breakColor = ''
+  const emit = (text: string) => out.push(/^\|[0-9]{2}/.test(text) ? text : lineColor + text)
+  for (let i = 0; i < line.length; ) {
+    const code = /^\|[0-9]{2}/.exec(line.slice(i, i + 3))
+    if (code) {
+      cur += code[0]
+      color = code[0]
+      i += 3
+      continue
+    }
+    const ch = String.fromCodePoint(line.codePointAt(i)!)
+    i += ch.length
+    if (curLen === w) {
+      if (ch === ' ') {
+        emit(cur)
+        lineColor = color
+        cur = ''
+        curLen = 0
+        breakAt = -1
+        continue
+      }
+      if (breakAt > 0) {
+        emit(cur.slice(0, breakAt).trimEnd())
+        const rest = cur.slice(breakAt)
+        lineColor = breakColor
+        cur = rest
+        curLen = curLen - breakLen
+      } else {
+        emit(cur)
+        lineColor = color
+        cur = ''
+        curLen = 0
+      }
+      breakAt = -1
+    }
+    cur += ch
+    curLen++
+    if (ch === ' ') {
+      breakAt = cur.length
+      breakLen = curLen
+      breakColor = color
+    }
+  }
+  emit(cur)
+  return out
 }
 
 /** Pads or cuts pipe-coded text to exactly `width` visible cells. */

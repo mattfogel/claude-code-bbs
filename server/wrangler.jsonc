@@ -14,6 +14,10 @@
 			{
 				"name": "HUB",
 				"class_name": "Hub"
+			},
+			{
+				"name": "BOARD",
+				"class_name": "Board"
 			}
 		]
 	},
@@ -22,6 +26,12 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"Hub"
+			]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": [
+				"Board"
 			]
 		}
 	],
@@ -53,7 +63,10 @@
 			"routes": [{ "pattern": "bbs.mattfogel.com", "custom_domain": true }],
 			"workers_dev": false,
 			"durable_objects": {
-				"bindings": [{ "name": "HUB", "class_name": "Hub" }]
+				"bindings": [
+					{ "name": "HUB", "class_name": "Hub" },
+					{ "name": "BOARD", "class_name": "Board" }
+				]
 			},
 			"d1_databases": [
 				{

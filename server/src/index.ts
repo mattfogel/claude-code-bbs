@@ -1,28 +1,33 @@
-// The lATeNt sPaCE write API. Every route but /register needs
+// The lATENT sPACE write API. Every route but /register needs
 // `Authorization: Bearer <secret>`; reads go to the R2 feed, not here.
 
 import { Hono, type Context } from 'hono'
 
-import { sanitizeUserText } from '../../plugin/shared/pipe'
+import { sanitizeUserBody, sanitizeUserText, stripPipe } from '../../plugin/shared/pipe'
 import {
   LIMITS,
   checkPow,
   decodeStatus,
   isValidHandle,
   normalizeHandle,
+  SLUG_RE,
   type ApiError,
   type ErrorCode,
+  type ItemKind,
   type MeResponse,
+  type PostResponse,
   type RegisterResponse,
 } from '../../plugin/shared/protocol'
 import type { Caller, Env, UserRow } from './env'
 import { FEED_KEY, type HubResult, type PostKind } from './hub'
 
+export { Board } from './board'
 export { Hub } from './hub'
 
 type App = { Bindings: Env; Variables: { user: UserRow } }
 
-const MAX_BODY = 4096
+// A 4,000-character post, JSON-escaped, fits with room to spare.
+const MAX_BODY = 16_384
 
 const STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 429 | 503> = {
   invalid: 400,
@@ -35,6 +40,7 @@ const STATUS: Record<ErrorCode, 400 | 401 | 403 | 404 | 409 | 429 | 503> = {
   cooldown: 429,
   rate_limited: 429,
   busy: 503,
+  closed: 409,
 }
 
 const fail = (c: Context, code: ErrorCode, message: string) => c.json<ApiError>({ error: { code, message } }, STATUS[code])
@@ -63,6 +69,7 @@ async function body<T>(c: Context): Promise<Partial<T> | undefined> {
 }
 
 const hub = (env: Env) => env.HUB.get(env.HUB.idFromName('global'))
+const board = (env: Env, slug: string) => env.BOARD.get(env.BOARD.idFromName(slug))
 const caller = (u: UserRow): Caller => ({ id: u.id, handle: u.handle, location: u.location })
 
 function hubReply<T>(c: Context, r: HubResult<T>) {
@@ -76,12 +83,13 @@ app.onError((err, c) => {
   return fail(c, 'busy', 'ALL NODES BUSY - TRY AGAIN LATER')
 })
 
-app.get('/', c => c.text('lATeNt sPaCE - write API. Install the Claude Code plugin to call.\n'))
+app.get('/', c => c.text('lATENT sPACE - write API. Install the Claude Code plugin to call.\n'))
 
 // Dev and tests only: production serves the feed from the public bucket.
-app.get('/feed/:key', async c => {
-  if (c.env.SERVE_FEED !== '1' || c.req.param('key') !== FEED_KEY) return c.notFound()
-  const obj = await c.env.FEED.get(FEED_KEY, { onlyIf: c.req.raw.headers })
+app.get('/feed/*', async c => {
+  const key = c.req.path.slice('/feed/'.length)
+  if (c.env.SERVE_FEED !== '1' || !(key === FEED_KEY || /^boards\/[a-z0-9-]+\/(index|threads\/\d+)\.json$/.test(key))) return c.notFound()
+  const obj = await c.env.FEED.get(key, { onlyIf: c.req.raw.headers })
   if (!obj) return c.notFound()
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
@@ -150,12 +158,20 @@ app.post('/v1/logoff', async c => {
   return c.json({ ok: true })
 })
 
+/** Why this user may not write right now, if they may not. */
+function writeBlock(c: Context<App>) {
+  const u = c.get('user')
+  if (u.muted_until > now()) return fail(c, 'muted', 'You are muted for now.')
+  const quiet = u.created_at + LIMITS.newAccountQuietSec - now()
+  if (quiet > 0 && u.role === 'user') return fail(c, 'cooldown', `New accounts can post in ${Math.ceil(quiet / 60)} min.`)
+  return undefined
+}
+
 function postRoute(kind: PostKind, max: number) {
   return async (c: Context<App>) => {
     const u = c.get('user')
-    if (u.muted_until > now()) return fail(c, 'muted', 'You are muted for now.')
-    const quiet = u.created_at + LIMITS.newAccountQuietSec - now()
-    if (quiet > 0 && u.role === 'user') return fail(c, 'cooldown', `New accounts can post in ${Math.ceil(quiet / 60)} min.`)
+    const blocked = writeBlock(c)
+    if (blocked) return blocked
     const req = await body<{ text: string }>(c)
     const text = typeof req?.text === 'string' ? sanitizeUserText(req.text, max) : ''
     if (!text) return fail(c, 'invalid', 'Nothing to post.')
@@ -166,14 +182,52 @@ function postRoute(kind: PostKind, max: number) {
 app.post('/v1/oneliners', postRoute('oneliner', LIMITS.onelinerMax))
 app.post('/v1/rumors', postRoute('rumor', LIMITS.rumorMax))
 
-const isKind = (k: unknown): k is PostKind => k === 'oneliner' || k === 'rumor'
+// ---- message bases ------------------------------------------------------
+
+app.post('/v1/posts', async c => {
+  const u = c.get('user')
+  const blocked = writeBlock(c)
+  if (blocked) return blocked
+  const req = await body<{ conference: string; subject: string; to: string; body: string; replyTo: number; thread: number }>(c)
+  if (!req || typeof req.conference !== 'string' || typeof req.body !== 'string') return fail(c, 'invalid', 'Expected {conference, subject?, to?, body, replyTo?, thread?}.')
+  const slug = req.conference
+  const replyTo = Number.isInteger(req.replyTo) ? (req.replyTo as number) : undefined
+  const thread = Number.isInteger(req.thread) ? (req.thread as number) : undefined
+  const text = sanitizeUserBody(req.body, LIMITS.bodyMax, LIMITS.bodyLines)
+  if (!text) return fail(c, 'invalid', 'Nothing to post.')
+  const subject = stripPipe(sanitizeUserText(typeof req.subject === 'string' ? req.subject : '', LIMITS.subjectMax))
+  if (!subject && replyTo === undefined && thread === undefined) return fail(c, 'invalid', 'A new thread needs a subject.')
+  const toRaw = typeof req.to === 'string' ? normalizeHandle(req.to) : ''
+  const to = !toRaw || toRaw.toLowerCase() === 'all' ? '' : toRaw
+  if (to && !isValidHandle(to)) return fail(c, 'invalid', 'To: must be a handle or All.')
+
+  const h = hub(c.env)
+  if (!SLUG_RE.test(slug) || !(await h.hasConference(slug))) return fail(c, 'not_found', 'No such conference.')
+  const quota = await h.takeMessageQuota(u.id)
+  if (!quota.ok) return fail(c, quota.code, quota.message)
+  const r = await board(c.env, slug).post(slug, caller(u), { subject, to, body: text, replyTo, thread })
+  if (!r.ok) return fail(c, r.code, r.message)
+  await h.messagePosted(caller(u), slug, r.value.id, r.value.ts)
+  return c.json<PostResponse>({ id: r.value.id, thread: r.value.thread })
+})
+
+// ---- voting booth -------------------------------------------------------
+
+app.post('/v1/votes', async c => {
+  const req = await body<{ poll: number; option: number }>(c)
+  if (!req || !Number.isInteger(req.poll) || !Number.isInteger(req.option)) return fail(c, 'invalid', 'Expected {poll, option}.')
+  return hubReply(c, await hub(c.env).vote(c.get('user').id, req.poll as number, req.option as number))
+})
+
+const isKind = (k: unknown): k is ItemKind => k === 'oneliner' || k === 'rumor' || k === 'post'
+const isPostRef = (req: { kind?: unknown; conference?: unknown }) => req.kind !== 'post' || (typeof req.conference === 'string' && SLUG_RE.test(req.conference))
 
 app.post('/v1/report', async c => {
-  const req = await body<{ kind: string; id: number; reason: string }>(c)
-  if (!req || !isKind(req.kind) || !Number.isInteger(req.id)) return fail(c, 'invalid', 'Expected {kind, id, reason?}.')
+  const req = await body<{ kind: string; id: number; reason: string; conference: string }>(c)
+  if (!req || !isKind(req.kind) || !Number.isInteger(req.id) || !isPostRef(req)) return fail(c, 'invalid', 'Expected {kind, id, conference?, reason?}.')
   const reason = sanitizeUserText(typeof req.reason === 'string' ? req.reason : '', LIMITS.reportReasonMax)
   await c.env.DB.prepare('INSERT INTO reports (reporter_id, kind, item_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
-    .bind(c.get('user').id, req.kind, req.id, reason, now())
+    .bind(c.get('user').id, req.kind === 'post' ? `post:${req.conference}` : req.kind, req.id, reason, now())
     .run()
   return c.json({ ok: true })
 })
@@ -199,10 +253,21 @@ async function target(c: Context<App>, handle: unknown): Promise<UserRow | null>
 }
 
 app.post('/v1/mod/delete', async c => {
-  const req = await body<{ kind: string; id: number }>(c)
-  if (!req || !isKind(req.kind) || !Number.isInteger(req.id)) return fail(c, 'invalid', 'Expected {kind, id}.')
-  const r = await hub(c.env).remove(req.kind, req.id as number)
-  if (r.ok) await modlog(c, 'delete', `${req.kind}:${req.id}`)
+  const req = await body<{ kind: string; id: number; conference: string }>(c)
+  if (!req || !isKind(req.kind) || !Number.isInteger(req.id) || !isPostRef(req)) return fail(c, 'invalid', 'Expected {kind, id, conference?}.')
+  const id = req.id as number
+  if (req.kind === 'post') {
+    const slug = req.conference as string
+    const b = board(c.env, slug)
+    const author = await b.author(id)
+    const r = await b.remove(id)
+    if (!r.ok) return fail(c, r.code, r.message)
+    await hub(c.env).messagesRemoved(slug, 1, author)
+    await modlog(c, 'delete', `post:${slug}:${id}`)
+    return c.json({ ok: true })
+  }
+  const r = await hub(c.env).remove(req.kind, id)
+  if (r.ok) await modlog(c, 'delete', `${req.kind}:${id}`)
   return hubReply(c, r)
 })
 
@@ -214,7 +279,9 @@ for (const action of ['ban', 'unban', 'mute'] as const) {
     if (t.role === 'sysop' || (t.role === 'mod' && c.get('user').role !== 'sysop')) return fail(c, 'forbidden', 'Not on them.')
     if (action === 'ban') {
       await c.env.DB.prepare('UPDATE users SET banned = 1 WHERE id = ?').bind(t.id).run()
-      await hub(c.env).purge(t.id)
+      const h = hub(c.env)
+      await h.purge(t.id)
+      for (const slug of await h.conferenceSlugs()) await h.messagesRemoved(slug, await board(c.env, slug).purge(t.id))
     } else if (action === 'unban') {
       await c.env.DB.prepare('UPDATE users SET banned = 0 WHERE id = ?').bind(t.id).run()
     } else {
@@ -232,6 +299,44 @@ app.post('/v1/mod/motd', async c => {
   await hub(c.env).setMotd(text)
   await modlog(c, 'motd', 'hub', text)
   return c.json({ ok: true })
+})
+
+app.post('/v1/mod/poll', async c => {
+  const req = await body<{ question: string; options: unknown[] }>(c)
+  const question = stripPipe(sanitizeUserText(typeof req?.question === 'string' ? req.question : '', LIMITS.pollQuestionMax))
+  const options = Array.isArray(req?.options) ? req.options.map(o => stripPipe(sanitizeUserText(typeof o === 'string' ? o : '', LIMITS.pollOptionMax))).filter(Boolean) : []
+  if (!question || options.length < LIMITS.pollOptionsMin || options.length > LIMITS.pollOptionsMax) {
+    return fail(c, 'invalid', `A question and ${LIMITS.pollOptionsMin}-${LIMITS.pollOptionsMax} options.`)
+  }
+  const r = await hub(c.env).createPoll(question, options)
+  await modlog(c, 'poll', String(r.id), question)
+  return c.json(r)
+})
+
+app.post('/v1/mod/poll/close', async c => {
+  const req = await body<{ id: number }>(c)
+  if (!req || !Number.isInteger(req.id)) return fail(c, 'invalid', 'Expected {id}.')
+  const r = await hub(c.env).closePoll(req.id as number)
+  if (r.ok) await modlog(c, 'poll-close', String(req.id))
+  return hubReply(c, r)
+})
+
+app.post('/v1/mod/conference', async c => {
+  if (c.get('user').role !== 'sysop') return fail(c, 'forbidden', 'Sysop only.')
+  const req = await body<{ slug: string; name: string; sponsor: string; description: string; n: number; remove: boolean }>(c)
+  if (!req || typeof req.slug !== 'string' || !SLUG_RE.test(req.slug)) return fail(c, 'invalid', 'Expected {slug, name, sponsor?, description?, n?, remove?}.')
+  const name = stripPipe(sanitizeUserText(typeof req.name === 'string' ? req.name : '', LIMITS.conferenceNameMax))
+  if (!req.remove && !name) return fail(c, 'invalid', 'A conference needs a name.')
+  const r = await hub(c.env).setConference({
+    slug: req.slug,
+    name,
+    sponsor: stripPipe(sanitizeUserText(typeof req.sponsor === 'string' ? req.sponsor : '', LIMITS.handleMax)),
+    description: sanitizeUserText(typeof req.description === 'string' ? req.description : '', LIMITS.motdMax),
+    n: Number.isInteger(req.n) && (req.n as number) > 0 ? (req.n as number) : undefined,
+    remove: req.remove === true,
+  })
+  if (r.ok) await modlog(c, req.remove ? 'conference-remove' : 'conference', req.slug, name)
+  return hubReply(c, r)
 })
 
 app.notFound(c => fail(c, 'not_found', 'No such route.'))

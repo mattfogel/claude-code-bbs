@@ -41,7 +41,7 @@ const Term: ClientModule<TermProps, Local> = (props, surface) => {
     surface.onKey(key => {
       const cur = surface.state
       if (!cur || !latest) return
-      const step = press(cur.app, key, latest.view)
+      const step = press(cur.app, key, latest.view, Math.random, surface.columns || latest.columns)
       surface.setState({ app: step.state, now: Date.now() })
       if (step.action) surface.post(step.action)
     })

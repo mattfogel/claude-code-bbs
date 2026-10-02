@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { VGA, fitPipe, isCellChar, parsePipe, sanitizeUserText, stripPipe, visibleLength } from '../plugin/shared/pipe'
+import { VGA, fitPipe, isCellChar, parsePipe, sanitizeUserBody, sanitizeUserText, stripPipe, visibleLength, wrapPipe } from '../plugin/shared/pipe'
 import { checkPow, decodeStatus, encodeStatus, isValidHandle, leadingZeroBits, normalizeHandle } from '../plugin/shared/protocol'
 
 const ESC = String.fromCharCode(0x1b)
@@ -80,5 +80,29 @@ describe('protocol', () => {
     while (!(await checkPow('handle', n.toString(36), 8))) n++
     expect(await checkPow('handle', n.toString(36), 8)).toBe(true)
     expect(await checkPow('handle', 'NOT-VALID', 0)).toBe(false)
+  })
+})
+
+describe('sanitizeUserBody', () => {
+  it('keeps line spacing but drops controls and folds blank runs', () => {
+    const raw = `  /\\_/\\ \r\n ( o.o )${ESC}[2J\r\n\r\n\r\n\r\n|99> quoted\t|15text   \n\n`
+    expect(sanitizeUserBody(raw, 4000, 100)).toBe('  /\\_/\\\n ( o.o )\n\n> quoted  |15text')
+  })
+
+  it('cuts to the line and character limits', () => {
+    expect(sanitizeUserBody('a\nb\nc', 4000, 2)).toBe('a\nb')
+    expect(sanitizeUserBody('x'.repeat(50), 10, 5)).toBe('x'.repeat(10))
+    expect(sanitizeUserBody('\n \n|12  \n', 100, 5)).toBe('')
+  })
+})
+
+describe('wrapPipe', () => {
+  it('wraps at word boundaries and carries the color', () => {
+    expect(wrapPipe('|11the quick |13brown fox jumps', 10)).toEqual(['|11the quick', '|13brown fox', '|13jumps'])
+  })
+
+  it('splits words longer than the width', () => {
+    expect(wrapPipe('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij'])
+    expect(wrapPipe('', 4)).toEqual([''])
   })
 })

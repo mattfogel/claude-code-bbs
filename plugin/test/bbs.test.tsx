@@ -7,7 +7,7 @@ const FEED = 'https://feed.mattfogel.com/hub.json'
 const NOW = Date.parse('2026-10-02T18:00:00Z')
 
 const paneProps = (columns = 80, rows = 24) => ({
-  title: 'lATeNt sPaCE',
+  title: 'lATENT sPACE',
   isFocused: true,
   bodyColumns: columns,
   placement: 'dock' as const,
@@ -25,6 +25,19 @@ function fakeBoard(on: On) {
     presence: [] as string[],
     requests: [] as { url: string; body: unknown; auth?: string }[],
     down: false,
+    posts: [] as { id: number; slug: string; thread: number; handle: string; to: string; subject: string; body: string; ts: string; replyTo: number | null }[],
+    votes: [] as { poll: number; option: number; handle: string }[],
+  }
+  const iso = new Date(NOW).toISOString()
+  const conferences = () =>
+    ['general', 'claude'].map((slug, i) => {
+      const mine = board.posts.filter(p => p.slug === slug)
+      return { n: i + 1, slug, name: slug === 'general' ? 'General' : 'Claude Talk', sponsor: 'SysOp', description: '', posts: mine.length, lastPostId: Math.max(0, ...mine.map(p => p.id)), lastPostAt: mine.length ? iso : null }
+    })
+  const threadsOf = (slug: string) => [...new Set(board.posts.filter(p => p.slug === slug).map(p => p.thread))]
+  const threadFile = (slug: string, thread: number) => {
+    const posts = board.posts.filter(p => p.slug === slug && p.thread === thread).map((p, i) => ({ ...p, n: i + 1 }))
+    return { v: 1, slug, id: thread, subject: posts[0].subject, total: posts.length, posts }
   }
   const json = (status: number, data: unknown, headers: Record<string, string> = {}) => ({ value: { status, ok: status < 300, headers, text: JSON.stringify(data) } })
   on('http.fetch', async ($, e) => {
@@ -44,8 +57,25 @@ function fakeBoard(on: On) {
         rumors: [],
         lastCallers: board.calls.map(handle => ({ handle, location: 'NYC', ts: new Date(NOW).toISOString(), node: 1 })),
         nodes: [],
-        stats: { users: board.users.size, callsToday: board.calls.length, callsTotal: board.calls.length, onelinersTotal: board.oneliners.length },
+        stats: { users: board.users.size, callsToday: board.calls.length, callsTotal: board.calls.length, onelinersTotal: board.oneliners.length, postsTotal: board.posts.length },
+        conferences: conferences(),
+        polls: [{ id: 1, question: 'Best modem?', options: [0, 1].map(o => ({ text: o ? 'US Robotics' : '14.4', votes: board.votes.filter(v => v.option === o).length })), total: board.votes.length, closed: false, createdAt: iso }],
+        top: { posters: [], callers: [], oneliners: [] },
       }, { etag })
+    }
+    const file = /^https:\/\/feed\.mattfogel\.com\/boards\/([a-z]+)\/(index|threads\/(\d+))\.json$/.exec(e.url)
+    if (file) {
+      const slug = file[1]
+      if (file[2] === 'index') {
+        const threads = threadsOf(slug).map(id => {
+          const f = threadFile(slug, id)
+          const last = f.posts[f.posts.length - 1]
+          return { id, subject: f.subject, handle: f.posts[0].handle, createdAt: iso, posts: f.total, lastPostId: last.id, lastPostAt: iso, lastHandle: last.handle }
+        })
+        return json(200, { v: 1, slug, seq: board.posts.length, generatedAt: iso, threads: threads.reverse(), threadsTotal: threads.length })
+      }
+      const id = Number(file[3])
+      return threadsOf(slug).includes(id) ? json(200, threadFile(slug, id)) : json(404, {})
     }
     const path = e.url.slice(API.length)
     if (path === '/v1/register') {
@@ -72,6 +102,20 @@ function fakeBoard(on: On) {
       return json(200, { node: 1 })
     }
     if (path === '/v1/logoff') return json(200, { ok: true })
+    if (path === '/v1/posts') {
+      const id = board.posts.length + 1
+      const orig = board.posts.find(p => p.id === body.replyTo)
+      const thread = orig?.thread ?? Math.max(0, ...board.posts.map(p => p.thread)) + 1
+      board.posts.push({ id, slug: body.conference, thread, handle, to: body.to || orig?.handle || 'All', subject: body.subject || `Re: ${orig?.subject}`, body: body.body, ts: iso, replyTo: body.replyTo ?? null })
+      board.seq++
+      return json(200, { id, thread })
+    }
+    if (path === '/v1/votes') {
+      if (board.votes.some(v => v.handle === handle)) return json(400, { error: { code: 'invalid', message: 'You already voted in this one.' } })
+      board.votes.push({ poll: body.poll, option: body.option, handle })
+      board.seq++
+      return json(200, { ok: true })
+    }
     return json(404, { error: { code: 'not_found', message: path } })
   })
   return board
@@ -107,7 +151,7 @@ const screen = async (ui: { drawn: (s?: { in?: string }) => Promise<unknown> }) 
   return out.join('')
 }
 
-describe('lATeNt sPaCE', () => {
+describe('lATENT sPACE', () => {
   test('a new caller applies, logs on and posts a one-liner', async ($, on) => {
     const clock = engine(on)
     const board = fakeBoard(on)
@@ -169,6 +213,37 @@ describe('lATeNt sPaCE', () => {
     expect(sent).not.toContain('acme')
     expect(board.presence.length).toBeGreaterThan(0)
     for (const s of board.presence) expect(['idle', 'thinking', 'tool', 'tool:Bash']).toContain(s)
+  })
+
+  test('newscans, reads, replies and votes', async ($, on) => {
+    engine(on, { account: { handle: 'mattf', location: 'Toronto', secret: 's3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx' } })
+    const board = fakeBoard(on)
+    board.users.set('s3cret-mattf-xxxxxxxxxxxxxxxxxxxxxxxx', 'mattf')
+    board.posts.push({ id: 1, slug: 'general', thread: 1, handle: 'Razor', to: 'All', subject: 'modems', body: 'what did you dial in with?', ts: new Date(NOW).toISOString(), replyTo: null })
+    await start($)
+    const ui = await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })
+    for (const key of ['l', 'x']) await ui.key({ key })
+    expect(await screen(ui)).toContain('[Main Menu]')
+
+    await ui.key({ key: 'n' })
+    expect(await screen(ui)).toContain('1 new message in 1 thread')
+    await ui.key({ key: 'return' })
+    expect(await screen(ui)).toContain('what did you dial in with?')
+    expect(await screen(ui)).toContain('From: Razor')
+
+    for (const key of ['r', ...'a 2400', 'return', '/', 's', 'return']) await ui.key({ key: key === ' ' ? 'space' : key })
+    const sent = board.requests.find(r => r.url.endsWith('/v1/posts'))
+    expect(sent?.body).toMatchObject({ conference: 'general', replyTo: 1, body: 'a 2400', to: 'Razor' })
+    expect(await screen(ui)).toContain('Message #2 saved.')
+
+    // Read pointers persist: the next newscan finds nothing new.
+    for (const key of ['q', 'n']) await ui.key({ key })
+    expect(await screen(ui)).toContain('No new messages')
+
+    for (const key of ['q', 'v', '1', '2']) await ui.key({ key })
+    expect(board.votes).toEqual([{ poll: 1, option: 1, handle: 'mattf' }])
+    expect(await screen(ui)).toContain('Vote counted.')
+    await ui.unmount()
   })
 
   test('shows ALL NODES BUSY when the board is unreachable', async ($, on) => {
