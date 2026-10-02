@@ -459,6 +459,11 @@ export const register: Register = (on, options) => {
       lastRead,
       votes,
     }))
+    // Plugins get no install hook, so the first session that loads this one says how to start it, once.
+    if (!(await $.store.get('welcomed'))) {
+      await $.store.set('welcomed', true)
+      if (!acct) $.ui.toast('lATENT sPACE is installed. Type /bbs to dial in.', { timeoutMs: 15_000 })
+    }
     $.clock.every(POLL_MS, () => void poll($))
     $.clock.every(30_000, () => void syncPresence($))
     return next(e)
