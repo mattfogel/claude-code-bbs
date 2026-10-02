@@ -190,7 +190,7 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 ```
 claude-code-bbs/
   plugin/                        # the mod (self-contained: installs copy only this folder)
-    .claude-plugin/plugin.json   # name "latent-space", userConfig apiUrl/feedUrl
+    .claude-plugin/plugin.json   # name "latent-space" (no userConfig; URLs default to production, overridable by env vars)
     hooks/hooks.json             # { "modules": ["./register.tsx"] }
     hooks/register.tsx           # /bbs, pane, Client props, poll loop, write API, PoW, status hooks
     client/term.tsx              # Client surface module: keys in, colored Text runs out
@@ -228,11 +228,11 @@ The shared code lives under `plugin/shared/` rather than at the top level, becau
 - [x] `shared/protocol.ts`: feed and API types
 - [x] Server: D1 schema (users, reports, modlog); Worker router; `/register` (with proof of work), `/call`, `/presence`, `/logoff`, `/oneliners`, `/rumors`, `/report`, `/mod/{delete,ban,unban,mute,motd}`
 - [x] Hub Durable Object: SQLite tables, per-user quotas, per-IP registration quota, dirty flag + alarm → `hub.json` to R2, presence expiry
-- [ ] Cloudflare: D1 database id, R2 bucket + custom domain `feed.mattfogel.com` with a cache rule; Worker route `bbs.mattfogel.com`; fail-closed route (needs the account; see README)
+- [x] Cloudflare: D1 database id, R2 bucket + custom domain `feed.mattfogel.com` with a cache rule; Worker route `bbs.mattfogel.com`; fail-closed route (needs the account; see README)
 - [x] Plugin: `/bbs` command, pane, Client module renderer, matrix screen, new-user flow, logon sequence, main menu, one-liners, rumors, last callers, who's online, stats, status bar, BUSY mode
 - [x] Original art: matrix logo, menu headers and footers
 - [x] Tests: Node unit tests, Workers integration tests, `claude plugin test` flows
-- [ ] Deploy; seed with a sysop account (`UPDATE users SET role = 'sysop' WHERE handle = ...`)
+- [x] Deploy; seed with a sysop account (`UPDATE users SET role = 'sysop' WHERE handle = ...`)
 - [ ] Try it in a real fullscreen session: key focus, pane sizing, colors in light themes
 
 ### Phase 2: messages and voting
@@ -242,7 +242,7 @@ The shared code lives under `plugin/shared/` rather than at the top level, becau
 - [x] Polls and votes in the Hub, results in hub.json
 - [x] Mod: base change, thread list, reader with Obv/2 headers, line editor, newscan with read pointers, voting booth, Top Ten
 - [x] Tests: server (threads, replies, quotas, moderation, conferences, polls), Node (every new screen and key flow), `claude plugin test` (newscan → read → reply → vote)
-- [ ] Deploy: the Board class arrives with Durable Object migration `v2`; a normal `npm run deploy` applies it
+- [x] Deploy: the Board class arrives with Durable Object migration `v2`; a normal `npm run deploy` applies it
 
 ### Phase 3: social
 Private mail (Mailbox Durable Objects, fetched through the Worker since mail is private), paging between users, New User Voting, a daily-turn door game, an optional GitHub device-flow "verified" badge.
