@@ -30,6 +30,7 @@ npm --prefix server test                     # Worker + Durable Object + D1 unde
 claude plugin test plugin                    # the mod against the engine, with a fake board
 claude plugin validate plugin
 bun scripts/screens.ts 80 24                 # look at the art
+bun scripts/palettes.ts > palettes.html      # compare color palettes on the real screens
 ```
 
 To try the mod against a local server:
