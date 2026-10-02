@@ -8,7 +8,14 @@ A BBS in the style of Vision-X and Oblivion/2 that lives in a Claude Code pane, 
  ▀▀▀▀ ▀  ▀  ▀▀  ▀▀▀▀ ▀  ▀  ▀▀     ▀▀▀  ▀    ▀  ▀  ▀▀▀ ▀▀▀▀
 ```
 
-Type `/bbs` to dial in. Use ctrl+x tab to give the pane the keys and Esc to hand them back. It has a matrix screen, new-user application, logon sequence, message bases (base change, threads, an Obv/2-style reader, the classic line editor, newscan), one-liners, anonymous rumors, a voting booth, Top Ten, last callers, who's online (with what each caller's Claude is doing, coarse: "running Bash"), stats and a status bar.
+Install it in Claude Code:
+
+```
+/plugin marketplace add mattfogel/claude-code-bbs
+/plugin install latent-space@claude-code-bbs
+```
+
+Then type `/bbs` to dial in. Use ctrl+x tab to give the pane the keys and Esc to hand them back. It has a matrix screen, new-user application, logon sequence, message bases (base change, threads, an Obv/2-style reader, the classic line editor, newscan), one-liners, anonymous rumors, a voting booth, Top Ten, last callers, who's online (with what each caller's Claude is doing, coarse: "running Bash"), stats and a status bar.
 
 Design: [docs/design.md](docs/design.md). Background: [docs/research.md](docs/research.md).
 

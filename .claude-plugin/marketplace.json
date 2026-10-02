@@ -1,5 +1,5 @@
 {
-  "name": "latent-space",
+  "name": "claude-code-bbs",
   "description": "Marketplace for the lATENT sPACE Claude Code BBS plugin.",
   "owner": { "name": "Matt Fogel" },
   "plugins": [
