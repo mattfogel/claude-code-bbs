@@ -8,6 +8,7 @@ import {
   LIMITS,
   checkPow,
   decodeStatus,
+  isReservedHandle,
   isValidHandle,
   normalizeHandle,
   SLUG_RE,
@@ -57,7 +58,16 @@ function newSecret(): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+/** One address per IPv4, one per /64 for IPv6: a single host holds billions of IPv6 addresses. */
+function ipKey(ip: string | undefined): string {
+  if (!ip) return 'unknown'
+  if (!ip.includes(':')) return ip
+  const groups = ip.split('::')[0].split(':')
+  return groups.slice(0, 4).join(':')
+}
+
 async function body<T>(c: Context): Promise<Partial<T> | undefined> {
+  if (Number(c.req.header('content-length')) > MAX_BODY) return undefined
   const text = await c.req.text()
   if (text.length > MAX_BODY) return undefined
   try {
@@ -105,10 +115,11 @@ app.post('/v1/register', async c => {
   if (!req || typeof req.handle !== 'string' || typeof req.nonce !== 'string') return fail(c, 'invalid', 'Expected {handle, location?, nonce}.')
   const handle = normalizeHandle(req.handle)
   if (!isValidHandle(handle)) return fail(c, 'invalid', `Handles are ${LIMITS.handleMin}-${LIMITS.handleMax} letters, digits, spaces, _ - or .`)
+  if (isReservedHandle(handle)) return fail(c, 'taken', `The handle "${handle}" is reserved.`)
   const location = sanitizeUserText(typeof req.location === 'string' ? req.location : '', LIMITS.locationMax).replace(/\|[0-9]{2}/g, '')
   if (!(await checkPow(handle, req.nonce, Number(c.env.POW_BITS) || LIMITS.powBits))) return fail(c, 'invalid', 'Bad proof of work.')
 
-  const ipHash = await sha256Hex(`latent-space:${c.req.header('cf-connecting-ip') ?? 'unknown'}`)
+  const ipHash = await sha256Hex(`latent-space:${ipKey(c.req.header('cf-connecting-ip'))}`)
   const stub = hub(c.env)
   if (!(await stub.canRegister(ipHash))) return fail(c, 'rate_limited', 'Too many new accounts from this address today.')
 
@@ -145,7 +156,10 @@ app.get('/v1/me', c => {
   return c.json<MeResponse>({ handle: u.handle, location: u.location, role: u.role, createdAt: new Date(u.created_at * 1000).toISOString() })
 })
 
-app.post('/v1/call', async c => c.json(await hub(c.env).call(caller(c.get('user')))))
+app.post('/v1/call', async c => {
+  if (c.get('user').muted_until > now()) return fail(c, 'muted', 'You are muted for now.')
+  return c.json(await hub(c.env).call(caller(c.get('user'))))
+})
 
 app.post('/v1/presence', async c => {
   const req = await body<{ status: string }>(c)
@@ -216,6 +230,8 @@ app.post('/v1/posts', async c => {
 app.post('/v1/votes', async c => {
   const req = await body<{ poll: number; option: number }>(c)
   if (!req || !Number.isInteger(req.poll) || !Number.isInteger(req.option)) return fail(c, 'invalid', 'Expected {poll, option}.')
+  const blocked = writeBlock(c)
+  if (blocked) return blocked
   return hubReply(c, await hub(c.env).vote(c.get('user').id, req.poll as number, req.option as number))
 })
 
@@ -226,7 +242,9 @@ app.post('/v1/report', async c => {
   const req = await body<{ kind: string; id: number; reason: string; conference: string }>(c)
   if (!req || !isKind(req.kind) || !Number.isInteger(req.id) || !isPostRef(req)) return fail(c, 'invalid', 'Expected {kind, id, conference?, reason?}.')
   const reason = sanitizeUserText(typeof req.reason === 'string' ? req.reason : '', LIMITS.reportReasonMax)
-  await c.env.DB.prepare('INSERT INTO reports (reporter_id, kind, item_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
+  const quota = await hub(c.env).takeReportQuota(c.get('user').id)
+  if (!quota.ok) return fail(c, quota.code, quota.message)
+  await c.env.DB.prepare('INSERT OR IGNORE INTO reports (reporter_id, kind, item_id, reason, created_at) VALUES (?, ?, ?, ?, ?)')
     .bind(c.get('user').id, req.kind === 'post' ? `post:${req.conference}` : req.kind, req.id, reason, now())
     .run()
   return c.json({ ok: true })

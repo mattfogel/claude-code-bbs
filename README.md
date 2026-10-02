@@ -53,9 +53,9 @@ Then point the plugin at the dev server in `~/.claude/settings.json`:
 2. `cd server && npx wrangler d1 create latent-space`, then put the printed id in both `d1_databases` entries in `wrangler.jsonc` (top level and `env.production`).
 3. `npx wrangler r2 bucket create latent-space-feed`, then attach the custom domain `feed.mattfogel.com` to it in the dashboard and add a cache rule (zone → Caching → Cache Rules) that caches everything on that host and respects origin `Cache-Control`.
 4. Check that `env.production` in `wrangler.jsonc` has the right D1 id and routes. `bbs.mattfogel.com` is a custom domain, so it already fails closed (error 1027) when it hits the free-plan limit. There is no toggle to set.
-5. `npm run deploy -- --env production` (applies the D1 migrations and deploys).
+5. `npm run deploy` (applies the D1 migrations and deploys the `production` environment; never run a bare `wrangler deploy`, which would stand up a second Worker on the same database and bucket).
 6. Register through the mod, then make yourself sysop:
-   `npx wrangler d1 execute latent-space --remote --command "UPDATE users SET role = 'sysop' WHERE handle = 'mattf'"`.
+   `npx wrangler d1 execute latent-space --remote --command "UPDATE users SET role = 'sysop' WHERE handle = 'matt'"`.
 
 ## Sysop chores
 

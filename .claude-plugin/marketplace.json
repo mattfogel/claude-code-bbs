@@ -1,0 +1,12 @@
+{
+  "name": "latent-space",
+  "description": "Marketplace for the lATENT sPACE Claude Code BBS plugin.",
+  "owner": { "name": "Matt Fogel" },
+  "plugins": [
+    {
+      "name": "latent-space",
+      "source": "./plugin",
+      "description": "lATENT sPACE: a Vision-X / Oblivion/2-style BBS in a pane, one global board for everyone, to read while Claude works. Type /bbs."
+    }
+  ]
+}

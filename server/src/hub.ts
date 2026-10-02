@@ -94,6 +94,7 @@ export class Hub extends DurableObject<Env> {
 
   /** Whether this IP (hashed) may register another account today. */
   async canRegister(ipHash: string): Promise<boolean> {
+    if (this.get('regDay', '') === utcDay(Date.now()) && this.get('regToday', 0) >= LIMITS.registrationsPerDay) return false
     const row = this.sql.exec<{ day: string; count: number }>('SELECT day, count FROM ip_quota WHERE ip_hash = ?', ipHash).toArray()[0]
     return !row || row.day !== utcDay(Date.now()) || row.count < LIMITS.registrationsPerIpPerDay
   }
@@ -107,6 +108,11 @@ export class Hub extends DurableObject<Env> {
       day,
     )
     this.sql.exec('DELETE FROM ip_quota WHERE day < ?', day)
+    if (this.get('regDay', '') !== day) {
+      this.set('regDay', day)
+      this.set('regToday', 0)
+    }
+    this.bump('regToday')
     this.bump('users')
     await this.markDirty()
   }
@@ -126,6 +132,12 @@ export class Hub extends DurableObject<Env> {
   async call(user: Caller): Promise<{ node: number }> {
     const now = Date.now()
     const node = this.nodeFor(user.id)
+    // A logon counts once per cooldown; repeats only keep the node alive, so a loop of calls cannot fill the list or churn the feed.
+    const last = this.sql.exec<{ ts: number }>('SELECT MAX(ts) AS ts FROM callers WHERE user_id = ?', user.id).toArray()[0]?.ts
+    if (last && now - last < LIMITS.callCooldownSec * 1000) {
+      this.sql.exec('UPDATE presence SET updated = ? WHERE user_id = ?', now, user.id)
+      return { node }
+    }
     this.sql.exec('INSERT INTO callers (user_id, handle, location, node, ts) VALUES (?, ?, ?, ?, ?)', user.id, user.handle, user.location, node, now)
     this.sql.exec('DELETE FROM callers WHERE id <= (SELECT MAX(id) FROM callers) - ?', LIMITS.feedLastCallers)
     this.upsertPresence(user, 'idle', node, now)
@@ -225,6 +237,11 @@ export class Hub extends DurableObject<Env> {
     return this.sql.exec('SELECT 1 FROM conferences WHERE slug = ?', slug).toArray().length > 0
   }
 
+  /** Reports are cheap to send and cost a D1 write each, so they get a daily cap. */
+  async takeReportQuota(userId: number): Promise<HubResult<null>> {
+    return this.takeQuota(userId, 'report', Date.now(), 0, LIMITS.reportsPerDay)
+  }
+
   /** The cooldown and daily limit for messages, across all conferences. */
   async takeMessageQuota(userId: number): Promise<HubResult<null>> {
     return this.takeQuota(userId, 'message', Date.now(), LIMITS.messageCooldownSec, LIMITS.messagesPerDay)
@@ -310,6 +327,7 @@ export class Hub extends DurableObject<Env> {
     this.sql.exec('UPDATE oneliners SET deleted = 1 WHERE user_id = ?', userId)
     this.sql.exec('UPDATE rumors SET deleted = 1 WHERE user_id = ?', userId)
     this.sql.exec('DELETE FROM presence WHERE user_id = ?', userId)
+    this.sql.exec('DELETE FROM callers WHERE user_id = ?', userId)
     this.sql.exec('DELETE FROM user_stats WHERE user_id = ?', userId)
     await this.markDirty()
   }

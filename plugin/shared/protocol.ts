@@ -20,6 +20,12 @@ export const LIMITS = {
   /** Accounts younger than this may read, log on and set presence, not post. */
   newAccountQuietSec: 600,
   registrationsPerIpPerDay: 3,
+  /** New accounts per day across the whole board, so rotating addresses cannot mass-register. */
+  registrationsPerDay: 200,
+  /** Reports per user per day. */
+  reportsPerDay: 10,
+  /** A user's logon is recorded in last callers at most this often. */
+  callCooldownSec: 300,
   presenceTtlSec: 600,
   /** Leading zero bits the registration proof of work needs. */
   powBits: 16,
@@ -53,6 +59,23 @@ export const LIMITS = {
 
 /** Handles: letters, digits, space, `_`, `-`, `.`; must start with a letter or digit. */
 export const HANDLE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.\-]{1,15}$/
+
+/** Handles nobody may take: the sysop's title and names that read as the board or its makers. */
+const RESERVED_HANDLES = new Set(['sysop', 'admin', 'administrator', 'moderator', 'mod', 'system', 'root', 'staff', 'anthropic', 'claude', 'all', 'everyone', 'anonymous'])
+
+/** A handle with case, separators and look-alike characters folded away. */
+export function handleSkeleton(handle: string): string {
+  return handle
+    .toLowerCase()
+    .replace(/[ _.\-]/g, '')
+    .replace(/rn/g, 'm')
+    .replace(/0/g, 'o')
+    .replace(/[1|]/g, 'l')
+}
+
+export function isReservedHandle(handle: string): boolean {
+  return RESERVED_HANDLES.has(handleSkeleton(handle))
+}
 
 export function normalizeHandle(raw: string): string {
   return String(raw).normalize('NFC').replace(/\s+/g, ' ').trim()

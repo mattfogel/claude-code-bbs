@@ -219,7 +219,7 @@ The shared code lives under `plugin/shared/` rather than at the top level, becau
 - Locally, run `claude --plugin-dir plugin/` or symlink `plugin/` into the session's dev-mods folder for hot reload.
 - Run `claude plugin test plugin/`.
 
-**Server dev loop:** `wrangler dev`, `wrangler d1 migrations apply DB --local`, `vitest`. Deploy with `wrangler d1 migrations apply DB --remote && wrangler deploy`.
+**Server dev loop:** `wrangler dev`, `wrangler d1 migrations apply DB --local`, `vitest`. Deploy with `npm run deploy` (both commands take `--env production`; a bare `wrangler deploy` creates a second Worker sharing the production D1 and R2).
 
 ## Phases
 

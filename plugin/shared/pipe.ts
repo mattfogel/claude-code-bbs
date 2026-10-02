@@ -140,6 +140,15 @@ export function sanitizeUserText(raw: string, maxVisible: number): string {
 
 /** The rules every piece of user text goes through, whitespace aside. */
 function cleanCodes(s: string): string {
+  // Removing one code can join the characters around it into another (`||Ab00` -> `|00`), so go until nothing changes.
+  for (let prev = ''; prev !== s; ) {
+    prev = s
+    s = cleanCodesOnce(s)
+  }
+  return s
+}
+
+function cleanCodesOnce(s: string): string {
   s = s.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '') // CSI sequences, before ESC itself goes
   s = s.replace(FORBIDDEN, ' ')
   s = s.replace(/\|([0-9]{2})/g, (m, n) => (Number(n) >= 1 && Number(n) <= 15 ? m : ''))

@@ -116,3 +116,11 @@ describe('theme', () => {
     expect(ACID_ICE[15]).toBe(VGA[15])
   })
 })
+
+describe('nested code smuggling', () => {
+  it('does not let removing one code assemble another', () => {
+    expect(sanitizeUserText('||Ab00hidden||Ab20bg x', 40)).toBe('hiddenbg x')
+    expect(sanitizeUserText('|%UN|00x', 40)).not.toMatch(/%UN|\|00/)
+    expect(sanitizeUserBody('||Ab00hidden', 100, 5)).toBe('hidden')
+  })
+})
