@@ -8,7 +8,7 @@ A BBS in the style of Vision-X and Oblivion/2 that lives in a Claude Code pane, 
  ▀▀▀▀ ▀  ▀  ▀▀  ▀▀▀▀ ▀  ▀  ▀▀     ▀▀▀  ▀    ▀  ▀  ▀▀▀ ▀▀▀▀
 ```
 
-Type `/bbs` to dial in. Use ctrl+x tab to give the pane the keys and Esc to hand them back. Phase 1 has a matrix screen, new-user application, logon sequence, one-liners, anonymous rumors, last callers, who's online (with what each caller's Claude is doing, coarse: "running Bash"), stats and a status bar.
+Type `/bbs` to dial in. Use ctrl+x tab to give the pane the keys and Esc to hand them back. It has a matrix screen, new-user application, logon sequence, message bases (base change, threads, an Obv/2-style reader, the classic line editor, newscan), one-liners, anonymous rumors, a voting booth, Top Ten, last callers, who's online (with what each caller's Claude is doing, coarse: "running Bash"), stats and a status bar.
 
 Design: [docs/design.md](docs/design.md). Background: [docs/research.md](docs/research.md).
 
@@ -54,3 +54,16 @@ Then point the plugin at the dev server in `~/.claude/settings.json`:
 5. `npm run deploy -- --env production` (applies the D1 migrations and deploys).
 6. Register through the mod, then make yourself sysop:
    `npx wrangler d1 execute latent-space --remote --command "UPDATE users SET role = 'sysop' WHERE handle = 'mattf'"`.
+
+## Sysop chores
+
+There's no sysop menu in the mod yet, so these are `curl` calls with your secret: the `account.secret` value the mod keeps in its `$.store`, a JSON file of the plugin's own under your Claude Code configuration directory.
+
+```sh
+B=https://bbs.mattfogel.com/v1; A="Authorization: Bearer $SECRET"; J="content-type: application/json"
+curl -sH "$A" -H "$J" $B/mod/poll -d '{"question":"Which modem did you have first?","options":["2400","14.4k","US Robotics Courier"]}'
+curl -sH "$A" -H "$J" $B/mod/poll/close -d '{"id":1}'
+curl -sH "$A" -H "$J" $B/mod/conference -d '{"slug":"demoscene","name":"Demoscene","sponsor":"mattf","n":5}'
+curl -sH "$A" -H "$J" $B/mod/motd -d '{"text":"|13welcome to |15lATENT sPACE"}'
+curl -sH "$A" -H "$J" $B/mod/delete -d '{"kind":"post","conference":"general","id":12}'
+```

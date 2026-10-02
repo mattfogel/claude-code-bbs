@@ -101,9 +101,9 @@ describe('press', () => {
     state = run(state, ['down', 'right'], member).state
     expect(state.sel).toBe(3)
     state = run(state, ['return'], member).state
-    expect(state.screen).toBe('who')
-    state = run(state, ['q', 'o'], member).state
     expect(state.screen).toBe('oneliners')
+    state = run(state, ['q', 'w'], member).state
+    expect(state.screen).toBe('who')
   })
 
   it('posts a one-liner and shows the outcome once', () => {

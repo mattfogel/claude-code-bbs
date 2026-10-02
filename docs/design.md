@@ -36,9 +36,10 @@ Prerequisite: the `mattfogel.com` zone must be on the Cloudflare account, so the
  Worker (server/src/index.ts) ── auth, validation, sanitizing, ban check
    │  RPC
    ├── Hub Durable Object (singleton "global")
-   │     SQLite: oneliners, rumors, lastcallers, presence, event log (seq)
+   │     SQLite: oneliners, rumors, lastcallers, presence, conferences, polls + votes,
+   │             per-user stats (Top Ten), quotas, event log (seq)
    │     alarm: at most every ~5 s, if dirty → write hub.json to R2
-   ├── Board Durable Object (one per conference)  [phase 2]
+   ├── Board Durable Object (one per conference, named by slug)
    │     SQLite: threads, posts → writes boards/<slug>/index.json + threads/<id>.json to R2
    └── Mailbox Durable Object (one per user)      [phase 3; mail is private, so it never goes on the feed]
  D1: users (handle UNIQUE, secret_hash, role, created_at, banned), bans, modlog
@@ -92,7 +93,11 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 | POST | `/oneliners` | `{text}` | Max 70 chars. |
 | POST | `/rumors` | `{text}` | Max 70 chars. Shown anonymously, but the server keeps the author for moderation. |
 | POST | `/report` | `{kind, id, reason}` | |
-| POST | `/mod/{delete,ban,unban,mute}` | | Requires the `sysop` or `mod` role. Writes to modlog. |
+| POST | `/posts` | `{conference, subject?, to?, body, replyTo?, thread?}` | A new thread needs a subject; a reply takes the thread, "Re:" subject and To: of the post it answers. Body up to 4,000 chars and 100 lines. 1 per 30 s and 20 per day per user, across conferences. |
+| POST | `/votes` | `{poll, option}` | One vote per user per poll, final. Closed polls refuse. |
+| POST | `/mod/{delete,ban,unban,mute}` | | Requires the `sysop` or `mod` role. Writes to modlog. `delete` takes `kind: "post"` with `conference`. A ban also hides the user's posts in every conference. |
+| POST | `/mod/poll`, `/mod/poll/close` | `{question, options[2..8]}`, `{id}` | Sysop or mod. |
+| POST | `/mod/conference` | `{slug, name, sponsor?, description?, n?, remove?}` | Sysop only. Removing a conference hides it from the list; its Board keeps the posts. |
 
 - **Auth:** every request except `/register` sends `Authorization: Bearer <secret>`. The Worker looks up the user by `sha256(secret)` in D1.
 - **Errors:** `{error: {code, message}}`, with codes `rate_limited`, `banned`, `cooldown`, `invalid`, `busy`.
@@ -122,7 +127,16 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 - **Opening:** `/bbs` opens the pane. It's opened by the person, so it is placed at any width, docked in fullscreen or inline otherwise. It never opens by itself.
 - **First run:** matrix screen → `[N]ew User` → handle/location prompts → proof of work ("Negotiating carrier…") → secret saved to `$.store`.
 - **Returning user:** matrix → Login (automatic, using the stored secret) → logon sequence (rumor of the day, last callers, one-liners) → Main Menu.
-- **Main menu (phase 1):** `[O]ne-liners  [R]umors  [L]ast Callers  [W]ho's Online  [S]tats  [G]oodbye`. Arrow-key lightbar plus single-key hotkeys.
+- **Main menu:** `[M]essages [N]ewscan [B]ase Change [O]ne-liners [R]umors [V]oting Booth [T]op Ten [L]ast Callers [W]ho's Online [S]tats [G]oodbye`, in two columns. Arrow-key lightbar plus single-key hotkeys.
+- **Message bases (phase 2):**
+  - *Base change* lists the conferences by number with sponsor, message count and a red `*` when something is newer than your read pointer. A digit joins one.
+  - *Messages* is the joined conference's thread list, most recently active first, with the same `*` marker. `P` posts a new thread.
+  - *Reading* shows one message at a time under an Obv/2-style header: a `┌─[ Base ]──── Msg n of N ─┐` rule, then From/Date, To and Subj. `N`/`P` step through the thread, `R` replies, arrows scroll long bodies, and `T` returns to the thread list.
+  - *The line editor* is the classic one: you type a line, Enter commits it, words wrap at the line width, and Backspace on an empty line pulls the previous one back. `/S` saves and `/A` aborts.
+  - *Newscan* collects every thread with posts past your read pointers (up to 20 threads), shows the count, and reads them in order. Running off the end of one thread moves on to the next, and then back to the main menu.
+- **Read pointers:** one per conference, the highest post id read, kept in `$.store`. Opening a thread starts at its first unread post. Newscan's `M` marks everything read.
+- **Voting booth:** lists polls (open first). A poll shows each option with a `████░░░░` bar, percent and count; a digit votes once. Your votes are kept in `$.store` so the screen can mark them.
+- **Top Ten:** posters, callers and one-liners as bars, scaled to the leader.
 - **Status bar** (bottom row): `lATENT sPACE │ Node 3 │ mattf │ 18:04 │ Claude: running Bash…`.
 - **"What my Claude is doing":**
   - `turn.start`, `tool.call` and `turn.complete` hooks set the local status ("Claude is thinking…", "Claude is running Bash…", "idle").
@@ -145,7 +159,10 @@ If the board grows, upgrading to Workers Paid ($5/mo) needs no redesign.
 | Data | Where | Why |
 |---|---|---|
 | handle, secret | `$.store` | Persists across sessions. It's plaintext, like `~/.ssh`. |
-| latest feed snapshot, ETag | `$.state` | Lasts the session and survives hot reload. |
+| latest feed snapshot, ETags per feed URL | `$.state` | Lasts the session and survives hot reload. |
+| board index on screen, the thread being read (bodies near the focused post only) | `$.state` (`view.board`, `view.thread`) | The Client's props are capped at 100,000 characters, so only about 30,000 characters of bodies go across at a time. |
+| last 12 thread files | `$.state` (`threads`) | Moving between posts doesn't refetch. |
+| read pointers, your votes | `$.store` (`lastRead`, `votes`) | Persist across sessions. |
 | current screen/menu, lightbar index | Client module state | UI-local. |
 | Claude status | `$.state` | Written by turn and tool hooks, read by the status bar. |
 
@@ -206,7 +223,13 @@ The shared code lives under `plugin/shared/` rather than at the top level, becau
 - [ ] Try it in a real fullscreen session: key focus, pane sizing, colors in light themes
 
 ### Phase 2: messages and voting
-Message conferences (one Board Durable Object each, with sponsors), newscan, Obv/2-style post headers, a line editor, a voting booth with ASCII bars, Top Ten.
+- [x] Board Durable Object per conference: threads, posts, R2 publishing of index and thread files, moderation (delete, purge on ban)
+- [x] Conferences in the Hub, seeded with General, Claude Talk, Show Off and Sysop & Feedback (sponsor "SysOp"); `/mod/conference` edits them
+- [x] Message quota across conferences; per-user stats; Top Ten in hub.json
+- [x] Polls and votes in the Hub, results in hub.json
+- [x] Mod: base change, thread list, reader with Obv/2 headers, line editor, newscan with read pointers, voting booth, Top Ten
+- [x] Tests: server (threads, replies, quotas, moderation, conferences, polls), Node (every new screen and key flow), `claude plugin test` (newscan → read → reply → vote)
+- [ ] Deploy: the Board class arrives with Durable Object migration `v2`; a normal `npm run deploy` applies it
 
 ### Phase 3: social
 Private mail (Mailbox Durable Objects, fetched through the Worker since mail is private), paging between users, New User Voting, a daily-turn door game, an optional GitHub device-flow "verified" badge.

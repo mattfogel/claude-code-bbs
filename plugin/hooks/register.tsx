@@ -9,8 +9,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Account, Action, Feed, Presence, View } from '../types'
-import { LIMITS, describeStatus, encodeStatus, leadingZeroBits, powInput, type ClaudeStatus } from '../shared/protocol'
+import type { Account, Action, BoardIndex, BoardThreadFile, Feed, Presence, ScanItem, ThreadView, View } from '../types'
+import { LIMITS, boardIndexKey, boardThreadKey, describeStatus, encodeStatus, leadingZeroBits, powInput, type ClaudeStatus } from '../shared/protocol'
 
 type Dollar = EngineInterface
 
@@ -19,14 +19,24 @@ const POLL_MS = 10_000
 const PRESENCE_MIN_GAP_MS = 120_000
 const PRESENCE_KEEPALIVE_MS = 300_000
 const POW_CHUNK = 2_000
+/** Characters of post bodies handed to the screen at once, around the post being read. */
+const BODY_BUDGET = 30_000
+const THREAD_CACHE = 12
+/** How long a new post takes to reach the feed: the Board's publish delay plus the cache. */
+const PUBLISH_LAG_MS = 7_000
+const NEWSCAN_THREADS = 20
 
-const view = atom({ plugin: 'latent-space', key: 'view' } as const, { phase: 'new', busy: false, claude: 'idle' } as View)
+const view = atom({ plugin: 'latent-space', key: 'view' } as const, { phase: 'new', busy: false, claude: 'idle', lastRead: {}, votes: {} } as View)
 const isOpen = atom({ plugin: 'latent-space', key: 'isOpen' } as const, false)
-const etag = atom({ plugin: 'latent-space', key: 'etag' } as const, '')
+const etags = atom({ plugin: 'latent-space', key: 'etags' } as const, {} as Record<string, string>)
+const threads = atom({ plugin: 'latent-space', key: 'threads' } as const, {} as Record<string, BoardThreadFile>)
 const presence = atom({ plugin: 'latent-space', key: 'presence' } as const, { sent: '', sentAt: 0, wanted: 'idle' } as Presence)
 
 /** Set by register from the plugin's options. */
 const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json' }
+
+/** A file next to hub.json on the feed (boards/<slug>/...). */
+const feedFile = (key: string) => config.feedUrl.replace(/[^/]*$/, '') + key
 
 type ApiResult = { ok: true; data: Record<string, unknown> } | { ok: false; code: string; message: string }
 
@@ -74,33 +84,189 @@ async function api($: Dollar, path: string, body?: unknown): Promise<ApiResult> 
   return { ok: false, code: String(err.code), message: String(err.message ?? 'Failed.') }
 }
 
-async function poll($: Dollar, force = false) {
-  if (!force && !(await read($, isOpen))) return
+type Fetched<T> = { status: 'fresh'; data: T } | { status: 'same' } | { status: 'missing' } | { status: 'error'; message: string }
+
+/** GETs a feed file as JSON, with If-None-Match unless forced. */
+async function fetchJson<T>($: Dollar, url: string, force: boolean): Promise<Fetched<T>> {
   const headers: Record<string, string> = {}
-  const tag = await read($, etag)
+  const tag = (await read($, etags))[url]
   if (tag && !force) headers['if-none-match'] = tag
   let res
   try {
-    res = await $.http.fetch(config.feedUrl, { headers })
-  } catch (err) {
-    await update($, view, (v): View => ({ ...v, feedError: 'no carrier' }))
-    return
-  }
-  if (res.status === 304) return
-  if (!res.ok) {
-    await update($, view, (v): View => ({ ...v, feedError: `HTTP ${res.status}` }))
-    return
-  }
-  let feed: Feed
-  try {
-    feed = JSON.parse(res.text)
+    res = await $.http.fetch(url, { headers })
   } catch {
-    await update($, view, (v): View => ({ ...v, feedError: 'line noise' }))
-    return
+    return { status: 'error', message: 'no carrier' }
   }
-  if (!feed || typeof feed.seq !== 'number' || !Array.isArray(feed.oneliners)) return
-  await update($, etag, () => res.headers.etag ?? '')
-  await update($, view, v => (v.feed && v.feed.seq > feed.seq ? { ...v, feedError: undefined } : { ...v, feed, feedError: undefined }))
+  if (res.status === 304) return { status: 'same' }
+  if (res.status === 404) return { status: 'missing' }
+  if (!res.ok) return { status: 'error', message: `HTTP ${res.status}` }
+  let data: T
+  try {
+    data = JSON.parse(res.text)
+  } catch {
+    return { status: 'error', message: 'line noise' }
+  }
+  const tagNow = res.headers.etag ?? ''
+  await update($, etags, e => ({ ...e, [url]: tagNow }))
+  return { status: 'fresh', data }
+}
+
+async function poll($: Dollar, force = false) {
+  if (!force && !(await read($, isOpen))) return
+  const r = await fetchJson<Feed>($, config.feedUrl, force)
+  if (r.status === 'error' || r.status === 'missing') {
+    await update($, view, (v): View => ({ ...v, feedError: r.status === 'error' ? r.message : 'no feed' }))
+  } else if (r.status === 'fresh') {
+    const feed = r.data
+    if (feed && typeof feed.seq === 'number' && Array.isArray(feed.oneliners)) {
+      await update($, view, v => (v.feed && v.feed.seq > feed.seq ? { ...v, feedError: undefined } : { ...v, feed, feedError: undefined }))
+    }
+  }
+  if (force) return
+  // Keep what is on screen current too: cheap, since an unchanged file is a 304.
+  const v = await read($, view)
+  if (v.board) await loadBoard($, v.board.slug, false)
+  if (v.thread) await loadThread($, v.thread.slug, v.thread.id, v.thread.focus, false)
+}
+
+// ---- message bases --------------------------------------------------------
+
+async function loadBoard($: Dollar, slug: string, force: boolean) {
+  if (force) await update($, view, (v): View => ({ ...v, board: v.board?.slug === slug ? { ...v.board, loading: true } : { slug, loading: true } }))
+  const r = await fetchJson<BoardIndex>($, feedFile(boardIndexKey(slug)), force)
+  await update($, view, (v): View => {
+    if (v.board?.slug !== slug) return v
+    if (r.status === 'fresh') return { ...v, board: { slug, index: r.data } }
+    if (r.status === 'missing') return { ...v, board: { slug, index: { v: 1, slug, seq: 0, generatedAt: '', threads: [], threadsTotal: 0 } } }
+    return { ...v, board: { ...v.board, loading: false } }
+  })
+}
+
+const threadKey = (slug: string, id: number) => `${slug}/${id}`
+
+/** Headers for every post, bodies only around `focus` within BODY_BUDGET. */
+function windowThread(file: BoardThreadFile, focus: number): ThreadView {
+  const posts: ThreadView['posts'] = file.posts.map(({ body, ...head }) => head)
+  let at = file.posts.findIndex(p => p.id === focus)
+  if (at < 0) at = 0
+  let budget = BODY_BUDGET
+  for (let d = 0; d < file.posts.length && budget > 0; d++) {
+    for (const i of d ? [at - d, at + d] : [at]) {
+      const p = file.posts[i]
+      if (!p || budget <= 0) continue
+      posts[i] = { ...posts[i], body: p.body }
+      budget -= p.body.length
+    }
+  }
+  return { slug: file.slug, id: file.id, subject: file.subject, total: file.total, posts, focus: file.posts[at]?.id ?? 0 }
+}
+
+async function loadThread($: Dollar, slug: string, id: number, focus: number | undefined, force: boolean) {
+  const key = threadKey(slug, id)
+  const cached = (await read($, threads))[key]
+  if (force && !cached) {
+    await update($, view, (v): View => ({ ...v, thread: { slug, id, subject: '', total: 0, posts: [], focus: focus ?? 0, loading: true } }))
+  }
+  const r = await fetchJson<BoardThreadFile>($, feedFile(boardThreadKey(slug, id)), force || !cached)
+  let file = cached
+  if (r.status === 'fresh') {
+    file = r.data
+    await update($, threads, t => {
+      const next = { ...t, [key]: r.data }
+      const keys = Object.keys(next)
+      for (const k of keys.slice(0, Math.max(0, keys.length - THREAD_CACHE))) if (k !== key) delete next[k]
+      return next
+    })
+  }
+  const lastRead = (await read($, view)).lastRead?.[slug] ?? 0
+  await update($, view, (v): View => {
+    if (focus === undefined && v.thread && (v.thread.slug !== slug || v.thread.id !== id)) return v
+    if (!file) return { ...v, thread: { slug, id, subject: '', total: 0, posts: [], focus: focus ?? 0, missing: r.status === 'missing' } }
+    const firstUnread = file.posts.find(p => p.id > lastRead)?.id ?? file.posts[0]?.id ?? 0
+    return { ...v, thread: windowThread(file, focus ?? v.thread?.focus ?? firstUnread) }
+  })
+}
+
+async function markRead($: Dollar, slug: string, postId: number) {
+  const v = await read($, view)
+  if ((v.lastRead?.[slug] ?? 0) >= postId) return
+  const lastRead = { ...v.lastRead, [slug]: postId }
+  await $.store.set('lastRead', lastRead)
+  await update($, view, (w): View => ({ ...w, lastRead: { ...w.lastRead, [slug]: Math.max(w.lastRead?.[slug] ?? 0, postId) } }))
+}
+
+/** Every thread with posts newer than this account's read pointers. */
+async function newscan($: Dollar) {
+  await update($, view, (v): View => ({ ...v, newscan: { scanning: true, items: [] } }))
+  await poll($, true)
+  const v = await read($, view)
+  const items: ScanItem[] = []
+  for (const c of v.feed?.conferences ?? []) {
+    const seen = v.lastRead?.[c.slug] ?? 0
+    if (c.lastPostId <= seen) continue
+    const r = await fetchJson<BoardIndex>($, feedFile(boardIndexKey(c.slug)), true)
+    if (r.status !== 'fresh') continue
+    for (const t of r.data.threads.filter(t => t.lastPostId > seen).reverse()) {
+      if (items.length >= NEWSCAN_THREADS) break
+      items.push({ slug: c.slug, conference: c.name, thread: t.id, subject: t.subject, unread: 0 })
+    }
+  }
+  for (const item of items) {
+    const r = await fetchJson<BoardThreadFile>($, feedFile(boardThreadKey(item.slug, item.thread)), true)
+    if (r.status === 'fresh') item.unread = r.data.posts.filter(p => p.id > (v.lastRead?.[item.slug] ?? 0)).length
+  }
+  await update($, view, (w): View => ({ ...w, newscan: { scanning: false, items: items.filter(i => i.unread !== 0) } }))
+}
+
+async function markAllRead($: Dollar) {
+  const v = await read($, view)
+  const lastRead = { ...v.lastRead }
+  for (const c of v.feed?.conferences ?? []) lastRead[c.slug] = Math.max(lastRead[c.slug] ?? 0, c.lastPostId)
+  await $.store.set('lastRead', lastRead)
+  await update($, view, (w): View => ({ ...w, lastRead, newscan: w.newscan && { scanning: false, items: [] } }))
+  await notify($, 'All messages marked read.')
+}
+
+async function sendMessage($: Dollar, m: Extract<Action, { type: 'message' }>) {
+  const r = await api($, '/v1/posts', { conference: m.conference, subject: m.subject, to: m.to, body: m.body, replyTo: m.replyTo, thread: m.thread })
+  if (!r.ok) return void (await notify($, r.message, true))
+  const id = Number(r.data.id)
+  const thread = Number(r.data.thread)
+  await notify($, `Message #${id} saved.`)
+  await markRead($, m.conference, id)
+  // Show it now; the feed catches up once the Board publishes.
+  const ts = new Date(await $.clock.now()).toISOString()
+  await update($, view, (v): View => {
+    if (!v.me || v.board?.slug !== m.conference || !v.board.index) return v
+    const index = v.board.index
+    const old = index.threads.find(t => t.id === thread)
+    const row = old
+      ? { ...old, posts: old.posts + 1, lastPostId: id, lastPostAt: ts, lastHandle: v.me.handle }
+      : { id: thread, subject: m.subject, handle: v.me.handle, createdAt: ts, posts: 1, lastPostId: id, lastPostAt: ts, lastHandle: v.me.handle }
+    return { ...v, board: { ...v.board, index: { ...index, threads: [row, ...index.threads.filter(t => t.id !== thread)] } } }
+  })
+  $.clock.after(PUBLISH_LAG_MS, () => void refreshAfterPost($, m.conference, thread))
+  $.clock.after(PUBLISH_LAG_MS * 2, () => void refreshAfterPost($, m.conference, thread))
+}
+
+async function refreshAfterPost($: Dollar, slug: string, thread: number) {
+  const v = await read($, view)
+  if (v.board?.slug === slug) await loadBoard($, slug, true)
+  if (v.thread?.slug === slug && v.thread.id === thread) await loadThread($, slug, thread, undefined, true)
+}
+
+async function castVote($: Dollar, pollId: number, option: number) {
+  const r = await api($, '/v1/votes', { poll: pollId, option })
+  if (!r.ok) return void (await notify($, r.message, true))
+  const votes = { ...(await read($, view)).votes, [String(pollId)]: option }
+  await $.store.set('votes', votes)
+  await update($, view, (v): View => {
+    const polls = v.feed?.polls?.map(p =>
+      p.id === pollId ? { ...p, total: p.total + 1, options: p.options.map((o, i) => (i === option ? { ...o, votes: o.votes + 1 } : o)) } : p,
+    )
+    return { ...v, votes, feed: v.feed && polls ? { ...v.feed, polls } : v.feed }
+  })
+  await notify($, 'Vote counted.')
 }
 
 /** Sends the wanted presence when it changed (at most every 2 min) or to keep the node alive. */
@@ -189,6 +355,30 @@ async function act($: Dollar, action: Action) {
     case 'refresh':
       await poll($, true)
       return
+    case 'board':
+      await update($, view, (v): View => ({ ...v, board: v.board?.slug === action.slug ? v.board : { slug: action.slug, loading: true }, thread: undefined }))
+      await loadBoard($, action.slug, true)
+      return
+    case 'read': {
+      const v = await read($, view)
+      const same = v.thread?.slug === action.slug && v.thread.id === action.thread && !v.thread.loading
+      await loadThread($, action.slug, action.thread, action.post, !same)
+      const focus = (await read($, view)).thread?.focus
+      if (focus) await markRead($, action.slug, focus)
+      return
+    }
+    case 'message':
+      await sendMessage($, action)
+      return
+    case 'newscan':
+      await newscan($)
+      return
+    case 'markAllRead':
+      await markAllRead($)
+      return
+    case 'vote':
+      await castVote($, action.poll, action.option)
+      return
   }
 }
 
@@ -219,11 +409,15 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'bbs', description: 'Call lATENT sPACE, the BBS in a pane' })
     const acct = await account($)
+    const lastRead = ((await $.store.get('lastRead')) ?? {}) as Record<string, number>
+    const votes = ((await $.store.get('votes')) ?? {}) as Record<string, number>
     await update($, view, (v): View => ({
       ...v,
       phase: acct ? 'ready' : 'new',
       me: acct ? { handle: acct.handle, location: acct.location, node: v.me?.node } : undefined,
       registering: undefined,
+      lastRead,
+      votes,
     }))
     $.clock.every(POLL_MS, () => void poll($))
     $.clock.every(30_000, () => void syncPresence($))

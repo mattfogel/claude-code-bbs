@@ -7,11 +7,13 @@ import type { Action, View } from '../types'
 import { fitPipe, sanitizeUserText, stripPipe, visibleLength } from '../shared/pipe'
 import { LIMITS, decodeStatus, describeStatus, isValidHandle, normalizeHandle } from '../shared/protocol'
 import { logo } from './logo'
+import { drawMessages, isMessageScreen, openThreads, pressMessages, type Editor, type MessageScreen, type Reader } from './messages'
+import { ago, center, clean, footer, header, hotkey, pad, plain, type Item } from './ui'
 
 /** A key as the Client surface hands it (ClientKeyEvent). */
 export type ClientKey = { key: string; ctrl?: true; shift?: true; meta?: true }
 
-export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye'
+export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye' | MessageScreen
 
 type InputPurpose = 'handle' | 'location' | 'oneliner' | 'rumor'
 
@@ -30,11 +32,19 @@ export type AppState = {
   seen: number
   /** Logged on this call: the main menu is home, not the matrix. */
   onBoard: boolean
+  /** The conference picked on the base-change screen (slug). */
+  base?: string
+  /** The lightbar row on list screens (bases, threads, polls). */
+  list: number
+  reader?: Reader
+  editor?: Editor
+  /** Which newscan item is being read. */
+  scan: number
+  /** The poll on screen. */
+  poll?: number
 }
 
-export const initialState = (seed = 0): AppState => ({ screen: 'matrix', sel: 0, input: null, apply: { handle: '', location: '' }, rumorSeed: seed, seen: 0, onBoard: false })
-
-type Item = { key: string; label: string }
+export const initialState = (seed = 0): AppState => ({ screen: 'matrix', sel: 0, input: null, apply: { handle: '', location: '' }, rumorSeed: seed, seen: 0, onBoard: false, list: 0, scan: 0 })
 
 export const MATRIX: Item[] = [
   { key: 'l', label: 'Login' },
@@ -43,8 +53,13 @@ export const MATRIX: Item[] = [
 ]
 
 export const MAIN: (Item & { screen: Screen })[] = [
+  { key: 'm', label: 'Messages', screen: 'threads' },
+  { key: 'n', label: 'Newscan', screen: 'newscan' },
+  { key: 'b', label: 'Base Change', screen: 'bases' },
   { key: 'o', label: 'One-liners', screen: 'oneliners' },
   { key: 'r', label: 'Rumors', screen: 'rumors' },
+  { key: 'v', label: 'Voting Booth', screen: 'vote' },
+  { key: 't', label: 'Top Ten', screen: 'top' },
   { key: 'l', label: 'Last Callers', screen: 'callers' },
   { key: 'w', label: "Who's Online", screen: 'who' },
   { key: 's', label: 'Stats', screen: 'stats' },
@@ -67,9 +82,10 @@ const charOf = (k: ClientKey) => (k.key === 'space' ? ' ' : k.key)
 const latestNotice = (view: View) => view.notice?.id ?? 0
 
 /** One key pressed while the BBS has the keyboard. */
-export function press(state: AppState, key: ClientKey, view: View, rand: () => number = Math.random): Step {
+export function press(state: AppState, key: ClientKey, view: View, rand: () => number = Math.random, width = 80): Step {
   const s: AppState = { ...state, msg: undefined, seen: latestNotice(view) }
   if (s.input) return typing(s, key, view)
+  if (isMessageScreen(s.screen)) return pressMessages(s, key, view, width)
 
   switch (s.screen) {
     case 'matrix': {
@@ -100,8 +116,8 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
 
     case 'main': {
       const hot = MAIN.findIndex(i => i.key === key.key.toLowerCase())
-      if (hot >= 0) return enterMain(s, hot)
-      if (isEnter(key)) return enterMain(s, s.sel)
+      if (hot >= 0) return enterMain(s, hot, view)
+      if (isEnter(key)) return enterMain(s, s.sel, view)
       return { state: { ...s, sel: moveSel(s.sel, key, MAIN.length, 2) } }
     }
 
@@ -123,6 +139,9 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
 
     case 'goodbye':
       return { state: { ...initialState(s.rumorSeed), seen: s.seen } }
+
+    default:
+      return { state: s }
   }
 }
 
@@ -131,10 +150,23 @@ function home(s: AppState): AppState {
   return s.onBoard ? { ...s, screen: 'main' } : { ...s, screen: 'matrix', sel: 0 }
 }
 
-function enterMain(s: AppState, index: number): Step {
+function enterMain(s: AppState, index: number, view: View): Step {
   const item = MAIN[index]
   const next: AppState = { ...s, sel: index, screen: item.screen }
-  if (item.screen === 'goodbye') return { state: next, action: { type: 'logoff' } }
+  switch (item.screen) {
+    case 'goodbye':
+      return { state: next, action: { type: 'logoff' } }
+    case 'threads':
+      return openThreads(next, view)
+    case 'bases': {
+      const at = (view.feed?.conferences ?? []).findIndex(c => c.slug === s.base)
+      return { state: { ...next, list: Math.max(0, at) } }
+    }
+    case 'newscan':
+      return { state: next, action: { type: 'newscan' } }
+    case 'vote':
+      return { state: { ...next, list: 0 } }
+  }
   return { state: next }
 }
 
@@ -183,34 +215,6 @@ function submit(s: AppState, purpose: InputPurpose, value: string, view: View): 
 // ---------------------------------------------------------------------------
 // Drawing
 
-const center = (text: string, width: number) => ' '.repeat(Math.max(0, Math.floor((width - visibleLength(text)) / 2))) + text
-
-/** Text from the feed, sanitized again before it is drawn (never trust the wire). */
-const clean = (text: unknown, max: number) => sanitizeUserText(String(text ?? ''), max)
-const plain = (text: unknown, max: number) => stripPipe(clean(text, max))
-
-function header(title: string, width: number): string[] {
-  const label = `|05▒▓|13█|16|15 ${title} |13█|05▓▒`
-  const rule = '─'.repeat(Math.max(0, width - visibleLength(label) - 1))
-  return [`${label} |08${rule}`, '']
-}
-
-function footer(keys: string, width: number): string {
-  return `|08${'─'.repeat(2)} ${keys} |08${'─'.repeat(Math.max(0, width - visibleLength(keys) - 4))}`
-}
-
-const hotkey = (item: Item, isSel: boolean) =>
-  isSel ? `|21|15 ${item.label} |16` : `|08[|15${item.label[0]}|08]|07${item.label.slice(1)}`
-
-function ago(ts: string, now: number): string {
-  const s = Math.max(0, Math.floor((now - Date.parse(ts)) / 1000))
-  if (!Number.isFinite(s)) return '?'
-  if (s < 60) return `${s}s`
-  if (s < 3600) return `${Math.floor(s / 60)}m`
-  if (s < 86400) return `${Math.floor(s / 3600)}h`
-  return `${Math.floor(s / 86400)}d`
-}
-
 function clock(now: number): string {
   const d = new Date(now)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
@@ -250,11 +254,9 @@ export function draw(state: AppState, view: View, width: number, height: number,
   return out.slice(-Math.max(1, height))
 }
 
-function pad(lines: string[], n: number): string[] {
-  return lines.length >= n ? lines : [...lines, ...Array.from({ length: n - lines.length }, () => '')]
-}
 
 function screenLines(state: AppState, view: View, w: number, h: number, now: number): string[] {
+  if (isMessageScreen(state.screen)) return drawMessages(state, view, w, h, now)
   const feed = view.feed
   switch (state.screen) {
     case 'matrix': {
@@ -380,6 +382,7 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
         row('Calls today', st?.callsToday),
         row('Calls total', st?.callsTotal),
         row('One-liners', st?.onelinersTotal),
+        row('Messages', st?.postsTotal),
         row('Nodes online', feed?.nodes.length),
         row('Your node', view.me?.node),
         row('Feed seq', feed?.seq),
