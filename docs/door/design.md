@@ -253,6 +253,60 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 4. **Society and NPCs:** corporations, the Hallucinations, Drifters, hails, mail and comm, photons, cloaks, Jump Drives, tow, the Haggle Lens, inactive deletion.
 5. **Seasons:** tournament settings, a season end and hall of fame, trade-route macros, and an optional Claude tie-in (a few capped bonus turns per day for finished Claude turns, sending only a count).
 
+## Phase 2 build notes (Conflict)
+
+Decisions for the Conflict build, on top of the rules above. The wire types are in `shared/door/protocol.ts` (phase-2 commands, events and the snapshot's `limpet` and `blocked` flags), the constants in `data.ts` (`COMBAT`, `AWARDS`, `ROB`, `BACKROOM`, `MARSHAL_PATROL_MS`).
+
+### Storage
+- `deploys (id, sector, owner_id, kind 'fighters'|'contact'|'limpet', count, mode, toll)`: one fighter stack per sector, and one stack per owner per mine kind. `toll` is credits collected by toll fighters.
+- `bounties (id, kind 'reward'|'hit', target_id, poster_id, amount, killer_id, ts)`: `killer_id` is set when the target dies to a player; claiming pays and deletes the row.
+- `busts (sector, player_id, ts)`: the last trader a port busted; ignored after `ROB.bustClearDays`.
+- `mail (id, player_id, ts, type, from_name, text)`: reports for players who were not there (attacked, fighters report, limpet attached, bounty paid). Delivered as `message` events on the player's next reply, then deleted.
+- `PlayerRec` gains optional fields (old rows read as defaults): `deaths`/`deathDay`, `deadUntil`, `limpet` (the owner id and name), `paid` (the sector whose toll you paid), `strikes`/`strikeDay` (Back Room passwords), `swearDay`, `sensed`.
+
+### Combat
+- `A` attacks a trader in the sector (target by name), the hostile sector fighters (`*fighters`), or a Marshal. Attacking costs no turns. The engine uses the reconstructed model in Combat and deployables. A defender that is overwhelmed flees with `COMBAT.fleeChance` to a random adjacent sector, unless it is a pod. Attackers must have at least one fighter, may send up to `fightersPerAttack`, and cannot attack themselves.
+- **Capture is deferred** (it needs ships a player owns but does not fly, a phase 3 or 4 feature). A ship with 0 fighters and 0 shields that takes any damage is destroyed, with salvage.
+- **Deaths:** the pod rules in Losing a ship. A pod hit again, a Skiff, or a third death in a UTC day (`COMBAT.maxDeathsPerDay`) is fatal: `deadUntil` is the next 00:00 UTC, experience and alignment drop by half, and every command but `state` answers that the pilot is in no shape to fly. The first request after `deadUntil` restores the starting ship, credits and fighters at sector 1 (the bank, experience and alignment stay).
+- **Safe pod path:** a random walk of 3 to 20 hops over sectors without hostile fighters, stopping at the first unsafe sector. Self-inflicted deaths (mines, NavHaz, offensive fighters, Marshals) go to the previous sector.
+- **Experience and alignment:** the research 02 §5.2 rows for fighting (opposite, same and neutral alignment) and podding, once the victim has 10 experience. Wrecks add `COMBAT.navhazPerWreck` NavHaz outside Concord Space.
+- **Deadman Charges** hit the killer for `COMBAT.deadmanDamage` per device (shields, fighters, then the ship).
+- **Concord Space:** a protected trader cannot be attacked there. Trying, or attacking a Marshal anywhere, destroys the attacker: 150,000 damage, −10 alignment, −10% experience, pod to the previous sector. Fighters, mines and offensive deployments are refused in Concord Space and on the space lanes, and extern clears them from the lanes.
+- **Marshals** have no stored position. Each sits in a Concord sector picked by seed from `floor(now / MARSHAL_PATROL_MS)`. They show in the sector display and read as density 489, 462 and 512. An evil pilot in a Marshal's Cruiser who ends a move in a sector holding Commodore Vale or High Marshal Teague loses the ship to 50,000 damage.
+
+### Deployables and entering sectors
+- Entry order: NavHaz, limpet, contact mines, fighters. A walk stops at the first sector that hurts you, at hostile fighters, or when you die.
+- **Fighters:** `F` deploys (personal only until corps exist) in Defensive, Offensive or Toll mode, and takes them back (`collect`). Refused in Concord Space, on the lanes, over `COMBAT.maxFightersWithPlanet` with a planet, over another owner's fighters, and **while another non-corp trader is in the sector** (so nobody can trap a sleeping ship).
+- **Hostile fighters** are another owner's, defensive or offensive, or toll fighters you have not paid. Offensive fighters attack on entry with `1.25 × (target max fighters + max shields)` and the survivors fall back to defend. Toll fighters take `count × COMBAT.tollPerFighter` credits when you can pay (`paid` is set to the sector and you may move on), and otherwise hold you. While hostile fighters hold you, `blocked` is true: `move` is refused, and you can `attack` them, `retreat` (1 turn, works at 0 turns, no hazards, to the previous sector) or `surrender`.
+- **Surrender** to sector fighters: a toll stack takes all the credits you have up to the toll, a defensive stack takes your whole cargo. Either way you may move on.
+- **Fighters** report each intruder to their owner through the mailbox. A kill pays the attacker the toll the stack was holding.
+- **Mines:** 50% of a sector's contact mines (rounded down) detonate, 20 damage each, absorbed by shields, then fighters, then the ship. Mines spare their owner. A sector holds at most `COMBAT.maxMinesPerSector`. Limpets clamp one onto your hull (it replaces any earlier one) and the owner learns it through the mailbox. The activated limpet scan (`scan` kind `limpet`) lists ships carrying your limpets. A Class 0 port or the Drydock removes a limpet for `CLASS0.limpetRemoval`.
+- **Mine Disruptor:** `disrupt` fires one into an adjacent sector and destroys up to `COMBAT.disruptorMines` mines and limpets there (limpets last), whoever owns them. Needs one in stock.
+- **Beacon:** `beacon` leaves up to 41 characters in a sector. A second beacon cancels the first and is used up too. Not in Concord Space.
+- **Density:** fighters 5 each, contact mines 10 each, limpets 2 each with the anomaly flag, Marshals by name.
+
+### Crime
+- At a class 1 to 8 port, alignment ≤ −100 opens `<R>ob / <S>teal` before trading. `rob` and `steal` cost 1 turn and need no dock. Safe amounts, bust odds, bust penalties and the repeat-bust rule are `ROB`. A port with `credits` below the request lets you ask for more but busts nobody; a rob takes at most what the port holds. Port credits only grow through players' trades. A bust never takes holds below `ROB.minHolds`.
+
+### The Marshal's Office and the Back Room
+- **Marshal's Office** (alignment ≥ `AWARDS.marshalOfficeMinAlign`): `commission` at alignment ≥ 500 sets alignment to 1,000 and issues the commission; `reward` posts credits on an evil trader (alignment < 0) for +1 alignment per 1,000; `wanted` lists the top ten by total reward; `claim` pays rewards on traders you have killed.
+- **The Last Light:** Old Sal sells a trace (credits, the target's sector), the Back Room password (per-player, `adjective noun` from `BACKROOM`), a fortune, and takes a swear once a day (−1 experience, −1 alignment).
+- **Back Room** (alignment ≤ `AWARDS.backRoomMaxAlign`, with the password): `hit` posts credits on anyone (−1 alignment per 250), `collect` pays hits on traders you killed, `alias` renames you for `BACKROOM.aliasBase + aliasPerExp × experience`. A wrong password strikes: thrown out, beaten (credits on hand), half your experience, then the ship.
+- Marshal rewards and hits are separate pools. Both are claimed by killing the target (a pod counts).
+
+### Extern (lazy, first request after 00:00 UTC)
+Clears fighters, mines and beacons from the space lanes and Concord Space, and takes `COMBAT.navhazDecay` points off every sector's NavHaz.
+
+### As built
+- **Bounties** are claimable once the target's ship is destroyed by you, so a pod escape counts (research says the pod must die too; tighten later if wanted).
+- **Marshal punishment** is a flat −10% experience and a pod, and the **turncoat rule** destroys the ship outright (50,000 damage would not kill a loaded Cruiser, so `COMBAT.turncoatDamage` is unused).
+- **Offensive fighters** that fail to kill lose everything they sent; only the unsent part holds the sector.
+- Fatal deaths park the player in sector 0 until respawn (ship "Second Wind"). A wrong Back Room password is a normal reply with strike prose. Attack targets are capped at 19 characters so Marshal names fit; aliases cannot take a Marshal's name or start with `*`.
+- The client refuses locally what it can know (deploys in Concord Space, the Marshal's Office and Back Room alignment gates, reward and hit minimums); the server enforces all of it, including the space lanes.
+
+### Not in this phase
+Capture, ships you own but do not fly, towing, photon missiles, cloaks and corporate deployments (`owner: 'corp'` is refused until corps exist), and the Hallucinations' use of `surrender`.
+
 ## Testing
 
 - **Engine** (`test/door/*.test.ts`, Node): Big Bang invariants (connected, ≤ 6 warps, Concord cluster, specials in 6-warp sectors, max course length), the price formula against research 01's measured table (within 2%), haggle tolerances against the measured counter-offer limits, hold cost against research 02's B = 173 checks, path walking and interrupts, ranks, turn regeneration, combat outcomes against the safety ratings.

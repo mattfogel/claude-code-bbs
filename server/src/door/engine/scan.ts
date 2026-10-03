@@ -1,6 +1,6 @@
 // Sector displays, port reports and scanners (research 01 §5.3, §5.4).
 
-import { DENSITY, portSells, type PortClass } from '../../../../plugin/shared/door/data'
+import { DENSITY, MARSHALS, portSells, type PortClass } from '../../../../plugin/shared/door/data'
 import type { DensityRow, PortItem, PortReport, SectorView } from '../../../../plugin/shared/door/protocol'
 import { capacity } from './prices'
 import type { PortRec } from './types'
@@ -15,6 +15,10 @@ export type SectorContents = {
   port?: PortRec
   planets: SectorView['planets']
   traders: SectorView['traders']
+  /** Phase 2: sector fighters, mines and limpets, and the Marshals in port. */
+  fighters?: SectorView['fighters']
+  mines?: SectorView['mines']
+  marshals?: string[]
 }
 
 export function sectorView(c: SectorContents): SectorView {
@@ -25,19 +29,25 @@ export function sectorView(c: SectorContents): SectorView {
     traders: c.traders,
     ships: [],
     navhaz: c.navhaz,
-    mines: [],
+    mines: c.mines ?? [],
     hallucinations: [],
-    marshals: [],
+    marshals: c.marshals ?? [],
     warps: c.warps,
   }
   if (c.beacon) view.beacon = c.beacon
+  if (c.fighters) view.fighters = c.fighters
   if (c.port) view.port = { name: c.port.name, class: c.port.class }
   return view
 }
 
 /** The density a scanner reads for a sector. */
 export function densityOf(c: SectorContents): number {
+  const mines = (c.mines ?? []).reduce((a, m) => a + m.count * (m.kind === 'contact' ? DENSITY.contactMine : DENSITY.limpet), 0)
+  const marshals = (c.marshals ?? []).reduce((a, name) => a + (MARSHALS.find(m => m.name === name)?.density ?? 0), 0)
   return (
+    (c.fighters ? c.fighters.count * DENSITY.fighter : 0) +
+    mines +
+    marshals +
     (c.port ? DENSITY.port : 0) +
     c.planets.length * DENSITY.planet +
     c.traders.length * DENSITY.mannedShip +
@@ -47,7 +57,7 @@ export function densityOf(c: SectorContents): number {
 }
 
 export function densityRow(c: SectorContents): DensityRow {
-  return { sector: c.id, density: densityOf(c), warps: c.warps.length, navhaz: c.navhaz, anomaly: false }
+  return { sector: c.id, density: densityOf(c), warps: c.warps.length, navhaz: c.navhaz, anomaly: (c.mines ?? []).some(m => m.kind === 'limpet' && m.count > 0) }
 }
 
 /** A commerce report for a standard port; undefined for specials. */

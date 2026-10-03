@@ -130,7 +130,7 @@ export type PlayerSnapshot = {
   v: 1; season: string; id: number; name: string; sector: number; prevSector: number; turns: number; turnsMax: number
   credits: number; bank: number; experience: number; alignment: number; timesBlownUp: number; deadUntil?: string
   commissioned: boolean; corp?: { id: number; name: string; isCeo: boolean }; ship: ShipState; avoids: number[]
-  lastSeenLog: number; requestsToday: number
+  lastSeenLog: number; requestsToday: number; limpet: boolean; blocked: boolean
 }
 
 export type PortSighting = { name: string; class: PortClassId; destroyed?: boolean; buildingDays?: number }
@@ -158,6 +158,20 @@ export type TradeStep = { commodity: Commodity; side: 'sell' | 'buy'; max: numbe
 export type ShipwrightRequest = { op: 'buy'; ship: number; name: string } | { op: 'sell'; shipId: number } | { op: 'rename'; name: string }
 export type BankRequest = { op: 'deposit' | 'withdraw'; amount: number } | { op: 'transfer'; amount: number; to: string }
 export type AnnounceRequest = { text: string }
+export type AttackRequest = { target: string; fighters: number }
+export type RobRequest = { credits: number }
+export type StealRequest = { commodity: Commodity; qty: number }
+export type BeaconRequest = { text: string }
+export type DisruptRequest = { sector: number }
+export type ScanRequest = { kind: 'density' | 'holo' | 'limpet' }
+export type Class0Request = { holds?: number; fighters?: number; shields?: number; removeLimpet?: boolean }
+export type DeployRequest =
+  | { kind: 'fighters'; count: number; owner: 'personal' | 'corp'; mode: FighterMode }
+  | { kind: MineKind; count: number; owner: 'personal' | 'corp' }
+export type CollectRequest = { kind: 'fighters' | MineKind; count: number }
+export type MarshalRequest = { op: 'commission' } | { op: 'reward'; target: string; amount: number } | { op: 'claim' } | { op: 'wanted' }
+export type BackroomRequest = { password: string; op: 'hit' | 'collect' | 'alias'; target?: string; amount?: number; alias?: string }
+export type SalRequest = { op: 'trace'; target: string } | { op: 'password' } | { op: 'swear' } | { op: 'fortune' }
 
 /**
  * A question the hooks module puts to the screen after a reply: a course to
@@ -214,10 +228,25 @@ export type DoorCmd =
   | { cmd: 'shipwright'; body: ShipwrightRequest }
   | { cmd: 'bank'; body: BankRequest }
   | { cmd: 'announce'; body: AnnounceRequest }
-  | { cmd: 'scan'; kind: 'density' | 'holo' }
+  | { cmd: 'scan'; kind: 'density' | 'holo' | 'limpet' }
   | { cmd: 'probe'; to: number }
   /** Toggles a sector on the avoid list; 0 clears it. */
   | { cmd: 'avoid'; sector: number }
+  /** Phase 2. `target` is a trader's name, or '*fighters' for the sector fighters that hold you. */
+  | { cmd: 'attack'; target: string; fighters: number }
+  | { cmd: 'retreat' }
+  | { cmd: 'surrender' }
+  | { cmd: 'deploy'; body: DeployRequest }
+  | { cmd: 'collect'; body: CollectRequest }
+  | { cmd: 'rob'; credits: number }
+  | { cmd: 'steal'; commodity: Commodity; qty: number }
+  | { cmd: 'marshal'; body: MarshalRequest }
+  | { cmd: 'backroom'; body: BackroomRequest }
+  | { cmd: 'beacon'; text: string }
+  | { cmd: 'disrupt'; sector: number }
+  | { cmd: 'sal'; body: SalRequest }
+  /** Removes a limpet at a Class 0 port or the Drydock. */
+  | { cmd: 'removeLimpet' }
   /** Drops the open question (no request). */
   | { cmd: 'clear' }
 

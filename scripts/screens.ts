@@ -75,7 +75,7 @@ const view: View = {
 const ship = { type: 1, name: 'Nightjar', holds: 20, cargo: [0, 20, 0] as [number, number, number], colonists: 0, fighters: 30, shields: 0,
   equipment: { contactMines: 0, limpets: 0, beacons: 0, seeds: 0, crackers: 0, deadman: 0, cloaks: 0, probes: 2, disruptors: 0, photons: 0, scanner: 'density' as const, planetScanner: false, lens: false, jump: 0 as const } }
 const snapshot = { v: 1 as const, season: 's1', id: 1, name: 'mattf', sector: 3554, prevSector: 412, turns: 187, turnsMax: 250, credits: 2412, bank: 0, experience: 40, alignment: 12,
-  timesBlownUp: 0, commissioned: false, ship, avoids: [], lastSeenLog: 0, requestsToday: 14 }
+  timesBlownUp: 0, commissioned: false, ship, avoids: [], lastSeenLog: 0, requestsToday: 14, limpet: false, blocked: false }
 const here = { id: 3554, region: 'uncharted' as const, port: { name: 'Kestrel Yard', class: 5 as const }, planets: [], traders: [{ name: 'Acid Burn', ship: 'Zero Cool', shipType: 8, fighters: 120 }],
   ships: [], navhaz: 0, mines: [], hallucinations: [], marshals: [], warps: [412, 1877, 3009] }
 const report = { sector: 3554, name: 'Kestrel Yard', class: 5 as const, seenAt: ago(5), items: [{ status: 'selling' as const, trading: 2140, pct: 100 }, { status: 'buying' as const, trading: 1620, pct: 98 }, { status: 'selling' as const, trading: 1180, pct: 100 }] }
@@ -125,6 +125,23 @@ for (const page of doorPages) {
   }
   console.log(`\n--- door: ${page} ---`)
   for (const line of draw(state, doorView, width, height, now)) {
+    console.log(parsePipe(line, {}, 7, 0, THEME).map(c => `\x1b[38;2;${rgb(c.fg)};48;2;${rgb(c.bg)}m${c.ch}`).join('') + '\x1b[0m')
+  }
+}
+
+// HYPERPLANE under fire: held by hostile fighters, with the target list open.
+const heldHere = { ...here, traders: [{ name: 'Acid Burn', ship: 'Zero Cool', shipType: 8, fighters: 120 }], fighters: { count: 40, owner: 'Razor', isYours: false, isCorp: false, mode: 'defensive' as const } }
+const heldView: View = { ...view, door: { season: 's1', phase: 'ready', rev: 4, busy: false, snapshot: { ...snapshot, blocked: true }, here: heldHere,
+  transcript: [...eventLines({ kind: 'fightersEncounter', count: 40, owner: 'Razor', mode: 'defensive' }), ...eventLines({ kind: 'stop', sector: 3554, reason: 'fighters' }), ...sectorLines(heldHere), '',
+    `${commandPrompt(snapshot)}|15A`, '|10<Attack>'] } }
+const heldState = { ...initialState(), screen: 'door' as const, onBoard: true, door: { page: 'game' as const, prompt: { kind: 'attackWho' as const, targets: [
+  { name: 'Acid Burn', label: '|11Acid Burn|10, 120 ftrs, Zero Cool' }, { name: '*fighters', label: '|12The sector fighters|10 (40 of Razor)' }] }, buf: '', scratch: [] } }
+if (process.argv.includes('--pipe')) {
+  for (const line of draw({ ...heldState, loggedAt: now - 18 * 60_000 }, heldView, width, height, now)) console.log(line)
+  console.log('')
+} else {
+  console.log('\n--- door: held by fighters ---')
+  for (const line of draw(heldState, heldView, width, height, now)) {
     console.log(parsePipe(line, {}, 7, 0, THEME).map(c => `\x1b[38;2;${rgb(c.fg)};48;2;${rgb(c.bg)}m${c.ch}`).join('') + '\x1b[0m')
   }
 }

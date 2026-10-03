@@ -490,6 +490,36 @@ export const COMBAT = {
   sectorFighterOdds: 1,
   /** Grudge points a Hallucination ship takes when fought (research 03 §8.2). */
   grudgePerShip: 3,
+  /** RECON: a defender that is overwhelmed (sent > fleeRatio × its fighters + shields) gets away with this chance. */
+  fleeChance: 0.9,
+  /** Each ship destroyed in a sector adds this much NavHaz (%), never in Concord Space. Research 02 §3.2. */
+  navhazPerWreck: 1,
+  /** NavHaz decays this many points each extern. Research 02 §4.4. */
+  navhazDecay: 3,
+  /** Indexes into MARSHALS: the two that turn on an evil pilot in a Marshal's Cruiser (research 02 §3.3). */
+  turncoatMarshals: [1, 2],
+} as const
+
+/**
+ * The Marshals patrol Concord Space. They have no stored position: each one
+ * sits in a seeded Concord sector for this long, then moves on.
+ */
+export const MARSHAL_PATROL_MS = 10 * 60_000
+
+/** The Back Room (research 02 §2.7). Alias and password prices besides LAST_LIGHT's are RECON. */
+export const BACKROOM = {
+  /** Alias cost = aliasBase + aliasPerExp × experience, capped at aliasMax. */
+  aliasBase: 1_000,
+  aliasPerExp: 10,
+  aliasMax: 999_999_999,
+  /** Fewest credits for a hit (−1 alignment per AWARDS.hitAlignPer) or a Marshal's reward (+1 per AWARDS.rewardAlignPer). */
+  hitMin: 250,
+  rewardMin: 1_000,
+  /** Wrong passwords in one UTC day: 1 thrown out, 2 beaten and robbed of credits on hand, 3 lose half your experience, 4 and up lose your ship. */
+  strikes: 4,
+  /** A password is one of each: `adjective noun`, picked by seed per player. */
+  adjectives: ['quiet', 'brittle', 'hollow', 'silver', 'crooked', 'patient', 'static', 'velvet', 'narrow', 'distant', 'frozen', 'gilded', 'mute', 'restless', 'sullen', 'wired'],
+  nouns: ['kernel', 'lattice', 'beacon', 'gradient', 'lantern', 'harbor', 'tensor', 'ledger', 'anchor', 'cipher', 'orbit', 'vector', 'signal', 'shutter', 'thread', 'margin'],
 } as const
 
 /** Experience and alignment awards. Research 02 §5.2. */

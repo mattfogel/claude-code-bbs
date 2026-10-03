@@ -8,6 +8,8 @@ import {
   courseLines, eventLines, portReportLines, quickStats, quickStatsLines, sectorLines, shipInfoLines, shipCatalogLines, rankTableLines, densityLines,
 } from '../plugin/shared/door/format'
 import { applyError, applyReply, emptyKnown, mergeKnown, plan, type DoorCtx } from '../plugin/client/door/session'
+import { DEATH } from '../plugin/shared/door/text'
+import { outfitterLines } from '../plugin/shared/door/format'
 
 const NOW = Date.parse('2026-10-02T18:04:00Z')
 
@@ -19,7 +21,7 @@ export const MAP: DoorMap = {
 
 const snap = (over: Partial<PlayerSnapshot> = {}): PlayerSnapshot => ({
   v: 1, season: 's1', id: 1, name: 'mattf', sector: 1, prevSector: 1, turns: 250, turnsMax: 250, credits: 300, bank: 0, experience: 0, alignment: 0,
-  timesBlownUp: 0, commissioned: false, avoids: [], lastSeenLog: 0, requestsToday: 1,
+  timesBlownUp: 0, commissioned: false, avoids: [], lastSeenLog: 0, requestsToday: 1, limpet: false, blocked: false,
   ship: { type: 1, name: 'Nightjar', holds: 20, cargo: [0, 0, 0], colonists: 0, fighters: 30, shields: 0,
     equipment: { contactMines: 0, limpets: 0, beacons: 0, seeds: 0, crackers: 0, deadman: 0, cloaks: 0, probes: 0, disruptors: 0, photons: 0, scanner: 'none', planetScanner: false, lens: false, jump: 0 } },
   ...over,
@@ -28,6 +30,10 @@ const snap = (over: Partial<PlayerSnapshot> = {}): PlayerSnapshot => ({
 const sector = (id: number, over: Partial<SectorView> = {}): SectorView => ({
   id, region: id <= 3 ? 'concord' : 'uncharted', planets: [], traders: [], ships: [], navhaz: 0, mines: [], hallucinations: [], marshals: [], warps: MAP.warps[id], ...over,
 })
+
+/** The default ship with some equipment swapped in. */
+const kit = (equipment: Partial<PlayerSnapshot['ship']['equipment']>, ship: Partial<PlayerSnapshot['ship']> = {}): PlayerSnapshot['ship'] =>
+  ({ ...snap().ship, ...ship, equipment: { ...snap().ship.equipment, ...equipment } })
 
 const HAVEN = sector(1, { port: { name: 'Haven', class: 0 }, beacon: 'Concord Space. Concord Law is enforced.', planets: [{ id: 1, name: 'Terra', class: 'T' }] })
 const PORT7 = sector(7, { port: { name: 'Kestrel Yard', class: 5 } })
@@ -314,5 +320,396 @@ describe('door screens', () => {
     const ship = run(s, ['s', 'b', '8', 'return', ...'Gull', 'return'], v)
     expect(ship.actions).toEqual([expect.objectContaining({ cmd: 'shipwright', body: { op: 'buy', ship: 8, name: 'Gull' } })])
     expect(run(s, ['q'], v).actions).toEqual([expect.objectContaining({ cmd: 'clear' })])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2: conflict.
+
+const RAZOR = { name: 'Razor', ship: 'Vex', shipType: 8, fighters: 120 }
+const FIGHTERS = { count: 40, owner: 'Gull', isYours: false, isCorp: false, mode: 'defensive' as const }
+const lastAction = (r: { actions: Action[] }) => r.actions.at(-1)
+
+describe('combat formatting', () => {
+  it('reads the new events', () => {
+    expect(text(eventLines({ kind: 'collected', what: 'fighters', count: 30, credits: 150 }))).toBe('You take back 30 fighters.\n150 credits of tolls come aboard with them.')
+    expect(text(eventLines({ kind: 'retreat', to: 4 }))).toContain('sector 4')
+    const dead = text(eventLines({ kind: 'dead', until: '2026-10-03T00:00:00Z', by: 'Razor' }))
+    expect(dead).toContain('Razor finishes your ship.')
+    expect(dead).toContain(stripPipe(DEATH.outForTheDay[0]))
+    expect(text(eventLines({ kind: 'dead', until: '2026-10-03T00:00:00Z' }))).not.toContain('finishes')
+    expect(text(eventLines({ kind: 'disrupted', sector: 6, mines: 12, limpets: 1 }))).toBe('The disruptor goes off in sector 6: 12 mines and 1 limpet destroyed.')
+    expect(text(eventLines({ kind: 'disrupted', sector: 6, mines: 0, limpets: 0 }))).toContain('finds nothing')
+    expect(text(eventLines({ kind: 'limpets', rows: [{ name: 'Razor', sector: 44 }] }))).toContain('Razor')
+    expect(text(eventLines({ kind: 'limpets', rows: [] }))).toContain('None of your limpets')
+    const wanted = text(eventLines({ kind: 'wanted', rows: [{ name: 'Razor', reward: 12000 }, { name: 'Gull', reward: 3000 }] }))
+    expect(wanted).toMatch(/1 Razor\s+12,000 cr/)
+    expect(text(eventLines({ kind: 'wanted', rows: [] }))).toContain('Nobody is wanted')
+  })
+
+  it('reads the existing combat events and never prints a pipe code a player typed', () => {
+    expect(text(eventLines({ kind: 'attack', target: 'Razor', sent: 20, lost: 4, killed: 9, shieldsLost: 3, destroyed: true, captured: false, fled: false, salvageCredits: 500 })))
+      .toBe('You send 20 fighters at Razor: 9 destroyed, 3 shield points down, 4 lost.\nRazor is destroyed.\nYou salvage 500 credits.')
+    expect(text(eventLines({ kind: 'attack', target: '*fighters', sent: 20, lost: 4, killed: 9, shieldsLost: 0, destroyed: true, captured: false, fled: false }))).toContain('The sector fighters are destroyed.')
+    expect(text(eventLines({ kind: 'attacked', by: 'Razor', damage: 40, lost: 7 }))).toBe('Razor attacks: 40 damage, 7 fighters lost.')
+    expect(text(eventLines({ kind: 'podded', sector: 9, by: 'Razor' }))).toContain('destroyed by Razor')
+    expect(text(eventLines({ kind: 'busted', expLost: 4, holdsLost: 2 }))).toContain('Busted!')
+    expect(text(eventLines({ kind: 'robbed', credits: 900 }))).toContain('900 credits')
+    expect(text(eventLines({ kind: 'stolen', commodity: 2, qty: 5 }))).toContain('Weights')
+    expect(text(eventLines({ kind: 'toll', amount: 200, paid: false }))).toContain("can't cover")
+    expect(text(eventLines({ kind: 'fightersEncounter', count: 40, owner: 'Gull', mode: 'offensive' }))).toContain('open fire')
+    expect(text(eventLines({ kind: 'deployed', what: 'fighters', count: 30, mode: 'toll' }))).toBe('30 fighters deployed (toll).')
+    const out = [
+      ...eventLines({ kind: 'attacked', by: '|09Evil', damage: 1, lost: 0 }), ...eventLines({ kind: 'limpets', rows: [{ name: '|09Bad', sector: 1 }] }),
+      ...eventLines({ kind: 'wanted', rows: [{ name: '|09Bad', reward: 1 }] }), ...eventLines({ kind: 'dead', until: '', by: '|09Bad' }),
+      ...eventLines({ kind: 'attack', target: '|09Bad', sent: 1, lost: 0, killed: 0, shieldsLost: 0, destroyed: false, captured: false, fled: true }),
+    ].join('\n')
+    expect(out).not.toContain('|09')
+    expect(fits(out.split('\n'))).toBe(true)
+  })
+
+  it('shows the limpet, the hold and the deployables on / and I', () => {
+    const s = snap({ limpet: true, blocked: true, ship: kit({ contactMines: 5, limpets: 2, beacons: 1, disruptors: 3, deadman: 40 }) })
+    const info = text(shipInfoLines(s))
+    expect(info).toContain('Deployables    : 5 Contact, 2 Limpet, 1 Beacon, 3 Disruptor, 40 Deadman')
+    expect(info).toContain('A limpet is clamped to it.')
+    expect(info).toContain('Hostile fighters hold this sector')
+    expect(text(shipInfoLines(snap()))).toContain('Deployables    : none')
+    const quick = text(quickStatsLines(s))
+    expect(quick).toContain('Limpet Yes')
+    expect(quick).toContain('Held Yes')
+    expect(quick).toContain('CMn 5')
+    expect(fits(shipInfoLines(s))).toBe(true)
+    expect(fits(quickStatsLines(s))).toBe(true)
+  })
+
+  it('lists the phase 2 items at the Outfitter', () => {
+    const out = text(outfitterLines(snap()))
+    for (const name of ['Marker Beacon', 'Deadman Charge', 'Contact Mine', 'Limpet Mine', 'Mine Disruptor']) expect(out).toContain(name)
+    expect(out).not.toContain('Seed Torpedo')
+    expect(text(outfitterLines(snap(), 1))).not.toContain('Limpet')
+  })
+})
+
+describe('combat session', () => {
+  it('routes every phase 2 command to its request', () => {
+    const body = (c: Parameters<typeof plan>[1]) => plan(ctx(), c).request
+    expect(body({ cmd: 'attack', target: 'Razor', fighters: 12 })).toEqual({ method: 'POST', path: '/v1/door/attack', body: { target: 'Razor', fighters: 12 } })
+    expect(body({ cmd: 'attack', target: '*fighters', fighters: 5 })?.body).toEqual({ target: '*fighters', fighters: 5 })
+    expect(body({ cmd: 'retreat' })).toEqual({ method: 'POST', path: '/v1/door/retreat', body: {} })
+    expect(body({ cmd: 'surrender' })).toEqual({ method: 'POST', path: '/v1/door/surrender', body: {} })
+    expect(body({ cmd: 'deploy', body: { kind: 'fighters', count: 9, owner: 'personal', mode: 'toll' } })).toEqual({ method: 'POST', path: '/v1/door/deploy', body: { kind: 'fighters', count: 9, owner: 'personal', mode: 'toll' } })
+    expect(body({ cmd: 'collect', body: { kind: 'limpet', count: 2 } })).toEqual({ method: 'POST', path: '/v1/door/collect', body: { kind: 'limpet', count: 2 } })
+    expect(body({ cmd: 'rob', credits: 800 })).toEqual({ method: 'POST', path: '/v1/door/rob', body: { credits: 800 } })
+    expect(body({ cmd: 'steal', commodity: 2, qty: 3 })).toEqual({ method: 'POST', path: '/v1/door/steal', body: { commodity: 2, qty: 3 } })
+    expect(body({ cmd: 'marshal', body: { op: 'wanted' } })).toEqual({ method: 'POST', path: '/v1/door/marshal', body: { op: 'wanted' } })
+    expect(body({ cmd: 'backroom', body: { password: 'quiet kernel', op: 'collect' } })?.body).toEqual({ password: 'quiet kernel', op: 'collect' })
+    expect(body({ cmd: 'beacon', text: 'hi' })).toEqual({ method: 'POST', path: '/v1/door/beacon', body: { text: 'hi' } })
+    expect(body({ cmd: 'disrupt', sector: 2 })).toEqual({ method: 'POST', path: '/v1/door/disrupt', body: { sector: 2 } })
+    expect(body({ cmd: 'sal', body: { op: 'trace', target: 'Razor' } })?.body).toEqual({ op: 'trace', target: 'Razor' })
+    expect(body({ cmd: 'removeLimpet' })).toEqual({ method: 'POST', path: '/v1/door/class0', body: { removeLimpet: true } })
+    expect(body({ cmd: 'scan', kind: 'limpet' })?.body).toEqual({ kind: 'limpet' })
+  })
+
+  it('refuses to plot a course while held, with no request', () => {
+    const p = plan(ctx({ snapshot: snap({ blocked: true }) }), { cmd: 'plot', to: 2, engage: true })
+    expect(p.request).toBeUndefined()
+    expect(text(p.lines)).toContain('Attack them, retreat or yield')
+  })
+
+  it('shows the new place after a pod or a retreat, and nothing after a death', () => {
+    const there = sector(4)
+    const podded = applyReply(ctx(), { cmd: 'attack', target: 'Razor', fighters: 9 }, reply({ here: there, events: [{ kind: 'podded', sector: 4, by: 'Razor' }] }))
+    expect(text(podded.lines)).toContain('Sector  : 4')
+    expect(podded.ask).toBeNull()
+    const retreat = applyReply(ctx(), { cmd: 'retreat' }, reply({ here: there, events: [{ kind: 'retreat', to: 4 }] }))
+    expect(text(retreat.lines)).toContain('Sector  : 4')
+    const dead = applyReply(ctx(), { cmd: 'attack', target: 'Marshal Ostrander', fighters: 1 }, reply({ here: there, events: [{ kind: 'podded', sector: 4 }, { kind: 'dead', until: '2026-10-03T00:00:00Z' }] }))
+    expect(text(dead.lines)).toContain('no shape to fly')
+    expect(text(dead.lines)).not.toContain('Sector  : 4')
+    const moved = applyReply(ctx(), { cmd: 'move', path: [2], mode: 'alert' }, reply({ here: sector(2, { fighters: FIGHTERS }), events: [{ kind: 'fightersEncounter', count: 40, owner: 'Gull', mode: 'defensive' }, { kind: 'stop', sector: 2, reason: 'fighters' }], snapshot: snap({ blocked: true }) }))
+    expect(text(moved.lines)).toContain('Halted in sector 2 by hostile fighters.')
+    expect(text(moved.lines)).toContain('Fighters: 40 (belong to Gull) [Defensive]')
+  })
+
+  it('keeps the Drydock and the trading post open after menu replies, and prints refusals in red', () => {
+    const open = ctx({ ask: { kind: 'drydock' } })
+    for (const c of [{ cmd: 'marshal', body: { op: 'wanted' } }, { cmd: 'sal', body: { op: 'fortune' } }, { cmd: 'removeLimpet' }] as const) {
+      expect(applyReply(open, c, reply({ events: [{ kind: 'text', text: 'ok' }] })).ask).toBeUndefined()
+      expect(applyError(open, c, 'invalid', 'Nope.')).toMatchObject({ ask: undefined, lines: ['|12Nope.'] })
+    }
+    expect(applyError(ctx(), { cmd: 'attack', target: 'X', fighters: 1 }, 'invalid', 'You are in no shape to fly.').lines).toEqual(['|12You are in no shape to fly.'])
+  })
+})
+
+describe('combat screens', () => {
+  const sent = (r: { actions: Action[] }) => r.actions.map(a => (a as { cmd?: string }).cmd)
+
+  it('attacks: pick a target, then fighters up to the hull limit', () => {
+    const v = door({ snapshot: snap({ ship: kit({}, { fighters: 900 }) }), here: sector(4, { traders: [RAZOR, { ...RAZOR, name: 'Gull' }], fighters: FIGHTERS }) })
+    const list = run(inGame(), ['a'], v)
+    expect(list.actions).toEqual([])
+    const out = screen(list.state, v)
+    expect(out).toContain('1 Razor, 120 ftrs, Vex')
+    expect(out).toContain('3 The sector fighters (40 of Gull)')
+    expect(out).toContain('Attack which target (0 to cancel)')
+    const picked = run(list.state, ['2', 'return'], v)
+    expect(screen(picked.state, v)).toContain('How many fighters (0 to 750)')
+    // More than the hull allows is refused locally.
+    const over = run(picked.state, [...'900', 'return'], v)
+    expect(over.actions).toEqual([])
+    expect(screen(over.state, v)).toContain('You can send at most 750.')
+    const go = run(picked.state, [...'25', 'return'], v)
+    expect(go.actions).toEqual([expect.objectContaining({ type: 'door', cmd: 'attack', target: 'Gull', fighters: 25 })])
+    const fighters = run(list.state, ['3', 'return', '7', 'return'], v)
+    expect(lastAction(fighters)).toMatchObject({ cmd: 'attack', target: '*fighters', fighters: 7 })
+    // 0 or empty cancels.
+    expect(run(picked.state, ['0', 'return'], v).actions).toEqual([])
+    expect(run(picked.state, ['return'], v).state.door?.prompt).toEqual({ kind: 'command' })
+  })
+
+  it('attacks a lone trader at once, and a Marshal only after an are-you-sure', () => {
+    const lone = door({ here: sector(4, { traders: [RAZOR] }) })
+    const r = run(inGame(), ['a'], lone)
+    expect(screen(r.state, lone)).toContain('How many fighters (0 to 30)')
+    expect(lastAction(run(r.state, ['4', 'return'], lone))).toMatchObject({ cmd: 'attack', target: 'Razor', fighters: 4 })
+    const marshal = door({ here: sector(2, { marshals: ['Commodore Vale'] }) })
+    const m = run(inGame(), ['a'], marshal)
+    expect(screen(m.state, marshal)).toContain('Are you POSITIVE? (Y/N) [N]')
+    expect(run(m.state, ['n'], marshal).state.door?.prompt).toEqual({ kind: 'command' })
+    const yes = run(m.state, ['y', '3', 'return'], marshal)
+    expect(lastAction(yes)).toMatchObject({ cmd: 'attack', target: 'Commodore Vale', fighters: 3 })
+  })
+
+  it('does not attack your own fighters, or with nobody there, or with no fighters; no request', () => {
+    const mine = door({ here: sector(4, { fighters: { ...FIGHTERS, isYours: true, owner: 'mattf' } }) })
+    expect(run(inGame(), ['a'], mine).actions).toEqual([])
+    expect(screen(run(inGame(), ['a'], mine).state, mine)).toContain('There is nobody here to attack.')
+    const none = door({ snapshot: snap({ ship: kit({}, { fighters: 0 }) }), here: sector(4, { traders: [RAZOR] }) })
+    const r = run(inGame(), ['a'], none)
+    expect(r.actions).toEqual([])
+    expect(screen(r.state, none)).toContain('You have no fighters to send.')
+  })
+
+  it('deploys fighters in a mode, and takes them back', () => {
+    const v = door({ here: sector(4) })
+    const menu = run(inGame(), ['f'], v)
+    expect(screen(menu.state, v)).toContain('<Fighters> (D)eploy, (T)ake back, (Q)uit')
+    const modes = { return: 'defensive', d: 'defensive', o: 'offensive', t: 'toll' } as const
+    for (const [key, mode] of Object.entries(modes)) {
+      const r = run(menu.state, ['d', ...'12', 'return', key], v)
+      expect(lastAction(r)).toMatchObject({ cmd: 'deploy', body: { kind: 'fighters', count: 12, owner: 'personal', mode } })
+    }
+    expect(run(menu.state, ['d', ...'31', 'return'], v).actions).toEqual([])
+    expect(screen(run(menu.state, ['d', ...'31', 'return'], v).state, v)).toContain('You can leave at most 30.')
+    const mineHere = door({ snapshot: snap({ ship: kit({}, { fighters: 10 }) }), here: sector(4, { fighters: { ...FIGHTERS, isYours: true, owner: 'mattf', count: 25 } }) })
+    const take = run(inGame(), ['f', 't'], mineHere)
+    expect(screen(take.state, mineHere)).toContain('How many fighters to take back (0 to 25)')
+    expect(lastAction(run(take.state, ['2', '0', 'return'], mineHere))).toMatchObject({ cmd: 'collect', body: { kind: 'fighters', count: 20 } })
+    expect(run(menu.state, ['q'], v).state.door?.prompt).toEqual({ kind: 'command' })
+  })
+
+  it('checks locally before deploying fighters: none aboard, Concord Space, none here to take', () => {
+    const empty = door({ snapshot: snap({ ship: kit({}, { fighters: 0 }) }), here: sector(4) })
+    expect(run(inGame(), ['f', 'd'], empty).actions).toEqual([])
+    expect(screen(run(inGame(), ['f', 'd'], empty).state, empty)).toContain('You have no fighters aboard.')
+    const concord = door({ here: sector(2) })
+    expect(screen(run(inGame(), ['f', 'd'], concord).state, concord)).toContain('Concord Space allows no fighters.')
+    expect(screen(run(inGame(), ['f', 't'], door({ here: sector(4) })).state, door({ here: sector(4) }))).toContain('You have no fighters in this sector.')
+  })
+
+  it('deploys, takes back and sweeps mines; local checks send nothing', () => {
+    const armed = door({ snapshot: snap({ ship: kit({ contactMines: 6, limpets: 2, disruptors: 1 }) }), here: sector(4, { mines: [{ kind: 'contact', count: 8, owner: 'mattf', isYours: true }], warps: [3, 5] }) })
+    expect(lastAction(run(inGame(), ['h', 'c', 'd', '4', 'return'], armed))).toMatchObject({ cmd: 'deploy', body: { kind: 'contact', count: 4, owner: 'personal' } })
+    expect(lastAction(run(inGame(), ['h', 'l', 'd', '2', 'return'], armed))).toMatchObject({ cmd: 'deploy', body: { kind: 'limpet', count: 2, owner: 'personal' } })
+    expect(screen(run(inGame(), ['h', 'c', 'd', '9', 'return'], armed).state, armed)).toContain('At most 6.')
+    // Taking back is capped by the room aboard (the hull carries 50) and by what is here.
+    const take = run(inGame(), ['h', 'c', 't'], armed)
+    expect(screen(take.state, armed)).toContain('(0 to 8)')
+    expect(lastAction(run(take.state, ['8', 'return'], armed))).toMatchObject({ cmd: 'collect', body: { kind: 'contact', count: 8 } })
+    // Sweep: only an adjacent sector.
+    const sweep = run(inGame(), ['h', 'c', 's'], armed)
+    expect(screen(sweep.state, armed)).toContain('You have 1 Mine Disruptors.')
+    const far = run(sweep.state, ['9', 'return'], armed)
+    expect(far.actions).toEqual([])
+    expect(screen(far.state, armed)).toContain('Sector 9 is not next door.')
+    expect(lastAction(run(sweep.state, ['5', 'return'], armed))).toMatchObject({ cmd: 'disrupt', sector: 5 })
+    // Nothing aboard, nothing here, no disruptor, Concord Space.
+    const bare = door({ here: sector(4) })
+    for (const keys of [['h', 'c', 'd'], ['h', 'l', 'd'], ['h', 'c', 't'], ['h', 'c', 's']]) {
+      const r = run(inGame(), keys, bare)
+      expect(r.actions, keys.join()).toEqual([])
+      expect(screen(r.state, bare)).toMatch(/You have no (Contact|Limpet) Mines aboard|in this sector|no Mine Disruptors/)
+    }
+    const concord = door({ snapshot: armed.door!.snapshot, here: sector(2) })
+    expect(screen(run(inGame(), ['h', 'c', 'd'], concord).state, concord)).toContain('Concord Space allows no mines.')
+  })
+
+  it('leaves a beacon with the text typed, and only with one aboard outside Concord Space', () => {
+    const v = door({ snapshot: snap({ ship: kit({ beacons: 1 }) }), here: sector(4) })
+    const r = run(inGame(), ['b', ...'Hello', 'return'], v)
+    expect(r.actions).toEqual([expect.objectContaining({ cmd: 'beacon', text: 'Hello' })])
+    expect(run(inGame(), ['b', 'return'], v).actions).toEqual([])
+    const long = run(inGame(), ['b', ...'x'.repeat(60)], v)
+    expect(long.state.door?.buf.length).toBe(41)
+    const none = run(inGame(), ['b'], door({ here: sector(4) }))
+    expect(none.actions).toEqual([])
+    expect(screen(none.state, door({ here: sector(4) }))).toContain('You have no Marker Beacons.')
+    const concord = door({ snapshot: v.door!.snapshot, here: sector(2) })
+    expect(screen(run(inGame(), ['b'], concord).state, concord)).toContain('Concord Space allows no beacons.')
+  })
+
+  it('retreats and yields only while held', () => {
+    const free = door({ here: sector(4) })
+    for (const key of ['r', 'y']) {
+      const r = run(inGame(), [key], free)
+      expect(r.actions, key).toEqual([])
+      expect(screen(r.state, free)).toMatch(/nothing to (retreat from|yield to)/)
+    }
+    const held = door({ snapshot: snap({ blocked: true }), here: sector(4, { fighters: FIGHTERS }) })
+    expect(screen(inGame(), held)).toContain('Hostile fighters hold this sector: (A)ttack, (R)etreat or (Y)ield.')
+    expect(sent(run(inGame(), ['r'], held))).toEqual(['retreat'])
+    const y = run(inGame(), ['y'], held)
+    expect(y.actions).toEqual([])
+    expect(screen(y.state, held)).toContain('Hand over your cargo? (Y/N) [N]')
+    expect(sent(run(y.state, ['n'], held))).toEqual([])
+    expect(sent(run(y.state, ['y'], held))).toEqual(['surrender'])
+    const toll = door({ snapshot: snap({ blocked: true }), here: sector(4, { fighters: { ...FIGHTERS, mode: 'toll' } }) })
+    expect(screen(run(inGame(), ['y'], toll).state, toll)).toContain('Hand over the toll in credits?')
+    // The hint goes with the block.
+    expect(screen(inGame(), free)).not.toContain('Hostile fighters hold')
+  })
+
+  it('scans for limpets from the S prompt with a holo scanner, and from the computer without one', () => {
+    const holo = door({ snapshot: snap({ ship: kit({ scanner: 'holo' }) }) })
+    const r = run(inGame(), ['s'], holo)
+    expect(screen(r.state, holo)).toContain('(D)ensity, (H)olo or (L)impet scan')
+    expect(lastAction(run(r.state, ['l'], holo))).toMatchObject({ cmd: 'scan', kind: 'limpet' })
+    const dens = door({ snapshot: snap({ ship: kit({ scanner: 'density' }) }) })
+    expect(lastAction(run(inGame(), ['s'], dens))).toMatchObject({ cmd: 'scan', kind: 'density' })
+    expect(lastAction(run(inGame(), ['c', 't'], door()))).toMatchObject({ cmd: 'scan', kind: 'limpet' })
+  })
+
+  it('offers the rob and steal menu to outlaws at an ordinary port; everyone else docks directly', () => {
+    const outlaw = door({ snapshot: snap({ alignment: -150, experience: 300 }), here: PORT7 })
+    const menu = run(inGame(), ['p'], outlaw)
+    expect(menu.actions).toEqual([])
+    expect(screen(menu.state, outlaw)).toContain('<Kestrel Yard> (T)rade, (R)ob, (S)teal, (Q)uit')
+    expect(sent(run(menu.state, ['t'], outlaw))).toEqual(['dock'])
+    expect(run(menu.state, ['q'], outlaw).state.door?.prompt).toEqual({ kind: 'command' })
+    const rob = run(menu.state, ['r'], outlaw)
+    expect(screen(rob.state, outlaw)).toContain('about 900 credits')
+    expect(lastAction(run(rob.state, [...'700', 'return'], outlaw))).toMatchObject({ cmd: 'rob', credits: 700 })
+    expect(run(rob.state, ['0', 'return'], outlaw).actions).toEqual([])
+    for (const [key, commodity] of [['c', 0], ['d', 1], ['w', 2]] as const) {
+      const steal = run(menu.state, ['s', key], outlaw)
+      expect(lastAction(run(steal.state, ['5', 'return'], outlaw))).toMatchObject({ cmd: 'steal', commodity, qty: 5 })
+    }
+    expect(screen(run(menu.state, ['s', 'c', ...'21', 'return'], outlaw).state, outlaw)).toContain('You have room for 20.')
+    const full = door({ snapshot: snap({ alignment: -150, ship: kit({}, { cargo: [20, 0, 0] }) }), here: PORT7 })
+    expect(screen(run(inGame(), ['p', 's'], full).state, full)).toContain('Your holds are full.')
+    // A good player, a mildly bad one, and Haven or the Drydock go straight in.
+    for (const [align, here] of [[0, PORT7], [-99, PORT7], [-500, HAVEN], [-500, sector(5, { port: { name: 'Drydock Anchorage', class: 9 } })]] as const) {
+      const v = door({ snapshot: snap({ alignment: align }), here })
+      expect(sent(run(inGame(), ['p'], v)), `${align} ${here.id}`).toEqual(['dock'])
+    }
+  })
+
+  it('removes a limpet at the trading post and the Drydock, only when there is one', () => {
+    const c0 = { kind: 'class0' as const, prices: { hold: 573, fighter: 200, shield: 150 } }
+    const clamped = door({ snapshot: snap({ limpet: true, credits: 9000 }), ask: c0 })
+    expect(screen(inGame(), clamped)).toContain('A limpet is clamped to your hull. Press L')
+    expect(lastAction(run(inGame(), ['l'], clamped))).toMatchObject({ cmd: 'removeLimpet' })
+    const clean = door({ ask: c0 })
+    const r = run(inGame(), ['l'], clean)
+    expect(r.actions).toEqual([])
+    expect(screen(r.state, clean)).toContain('There is no limpet on your hull.')
+    expect(screen(r.state, clean)).toContain('How many cargo holds')
+    const dock = door({ snapshot: snap({ limpet: true }), ask: { kind: 'drydock' } })
+    expect(lastAction(run(inGame(), ['l'], dock))).toMatchObject({ cmd: 'removeLimpet' })
+    const noDock = door({ ask: { kind: 'drydock' } })
+    expect(run(inGame(), ['l'], noDock).actions).toEqual([])
+  })
+
+  it('walks the Marshal\'s Office', () => {
+    const v = (over: Partial<PlayerSnapshot> = {}) => door({ snapshot: snap({ alignment: 600, ...over }), ask: { kind: 'drydock' } })
+    expect(lastAction(run(inGame(), ['m', 'a'], v()))).toMatchObject({ cmd: 'marshal', body: { op: 'commission' } })
+    expect(lastAction(run(inGame(), ['m', 'w'], v()))).toMatchObject({ cmd: 'marshal', body: { op: 'wanted' } })
+    expect(lastAction(run(inGame(), ['m', 'c'], v()))).toMatchObject({ cmd: 'marshal', body: { op: 'claim' } })
+    const reward = run(inGame(), ['m', 'p', ...'Razor', 'return', ...'5000', 'return'], v())
+    expect(lastAction(reward)).toMatchObject({ cmd: 'marshal', body: { op: 'reward', target: 'Razor', amount: 5000 } })
+    const low = run(inGame(), ['m', 'p', ...'Razor', 'return', ...'500', 'return'], v())
+    expect(low.actions).toEqual([])
+    expect(screen(low.state, v())).toContain('The Marshals post nothing under 1,000 credits.')
+    // Local refusals: too low for a commission, already commissioned, shunned outright.
+    const low2 = v({ alignment: 100 })
+    const r = run(inGame(), ['m', 'a'], low2)
+    expect(r.actions).toEqual([])
+    expect(screen(r.state, low2)).toContain('needs an alignment of 500')
+    expect(screen(run(inGame(), ['m', 'a'], v({ commissioned: true })).state, v())).toContain('already hold a commission')
+    const shunned = run(inGame(), ['m'], v({ alignment: -200 }))
+    expect(shunned.actions).toEqual([])
+    expect(screen(shunned.state, v())).toContain('want nothing to do with you')
+    expect(run(inGame(), ['m', 'p', 'escape'], v()).actions).toEqual([])
+  })
+
+  it('talks to Old Sal', () => {
+    const v = door({ ask: { kind: 'drydock' } })
+    const t = run(inGame(), ['t', 's'], v)
+    expect(screen(t.state, v)).toContain('Old Sal')
+    expect(lastAction(run(t.state, ['t', ...'Razor', 'return'], v))).toMatchObject({ cmd: 'sal', body: { op: 'trace', target: 'Razor' } })
+    expect(lastAction(run(t.state, ['p'], v))).toMatchObject({ cmd: 'sal', body: { op: 'password' } })
+    expect(lastAction(run(t.state, ['f'], v))).toMatchObject({ cmd: 'sal', body: { op: 'fortune' } })
+    expect(lastAction(run(t.state, ['s'], v))).toMatchObject({ cmd: 'sal', body: { op: 'swear' } })
+    expect(run(t.state, ['q'], v).actions).toEqual([])
+  })
+
+  it('carries the Back Room password in every request', () => {
+    const v = door({ snapshot: snap({ alignment: -300, experience: 50 }), ask: { kind: 'drydock' } })
+    const at = run(inGame(), ['t', 'b'], v)
+    expect(screen(at.state, v)).toContain('Password')
+    // Entering sends nothing: the door is a prompt, and the password stays local.
+    const inside = run(at.state, [...'quiet kernel', 'return'], v)
+    expect(inside.actions).toEqual([])
+    expect(screen(inside.state, v)).toContain('<Back Room> (H)it, (C)ollect, (A)lias, (Q)uit')
+    expect(screen(inside.state, v)).not.toContain('quiet kernel')
+    const pw = 'quiet kernel'
+    expect(lastAction(run(inside.state, ['c'], v))).toMatchObject({ cmd: 'backroom', body: { password: pw, op: 'collect' } })
+    expect(lastAction(run(inside.state, ['h', ...'Razor', 'return', ...'5000', 'return'], v))).toMatchObject({ cmd: 'backroom', body: { password: pw, op: 'hit', target: 'Razor', amount: 5000 } })
+    const alias = run(inside.state, ['a'], v)
+    expect(screen(alias.state, v)).toContain('A new alias costs 1,500 credits.')
+    expect(lastAction(run(alias.state, [...'Shade', 'return'], v))).toMatchObject({ cmd: 'backroom', body: { password: pw, op: 'alias', alias: 'Shade' } })
+    expect(screen(run(inside.state, ['h', ...'Razor', 'return', ...'100', 'return'], v).state, v)).toContain('Nobody takes a hit under 250 credits.')
+    // After a request the prompt is still inside, still holding the password.
+    const after = run(inside.state, ['c'], v)
+    expect(after.state.door?.prompt).toEqual({ kind: 'back', pw })
+    expect(run(inside.state, ['q'], v).state.door?.prompt).toEqual({ kind: 'dock', venue: 'tavern' })
+    // An empty password goes back to the tavern; a good name is turned away at the door.
+    expect(run(at.state, ['return'], v).state.door?.prompt).toEqual({ kind: 'dock', venue: 'tavern' })
+    const saint = door({ snapshot: snap({ alignment: 400 }), ask: { kind: 'drydock' } })
+    const door1 = run(inGame(), ['t', 'b'], saint)
+    expect(door1.actions).toEqual([])
+    expect(screen(door1.state, saint)).toContain('The bouncer looks you over')
+  })
+
+  it('shows the Outfitter\'s phase 2 items and sells them', () => {
+    const v = door({ snapshot: snap({ credits: 50_000 }), ask: { kind: 'drydock' } })
+    const o = run(inGame(), ['o'], v)
+    for (const name of ['Marker Beacon', 'Deadman Charge', 'Contact Mine', 'Limpet Mine', 'Mine Disruptor']) expect(screen(o.state, v)).toContain(name)
+    for (const [key, item] of [['b', 'beacon'], ['d', 'deadman'], ['m', 'contact'], ['l', 'limpet'], ['r', 'disruptor']] as const) {
+      expect(lastAction(run(o.state, [key, '5', 'return'], v)), item).toMatchObject({ cmd: 'outfit', item, qty: 5 })
+    }
+    expect(lastAction(run(o.state, ['d', ...'1000', 'return'], v))).toMatchObject({ cmd: 'outfit', item: 'deadman', qty: 1000 })
+    // The seed torpedo is a later phase.
+    expect(run(o.state, ['s'], v).state.door?.prompt).toEqual({ kind: 'dock', venue: 'outfit' })
+  })
+
+  it('still answers the later systems\' keys without a request', () => {
+    for (const key of ['l', 'u', 't', 'g']) {
+      const r = run(inGame(), [key], door())
+      expect(r.actions).toEqual([])
+      expect(screen(r.state, door())).toContain('comes online in a later Epoch')
+    }
+    for (const key of ['a', 'f', 'h', 'r', 'y', 'b']) expect(screen(run(inGame(), [key], door({ here: sector(4) })).state, door())).not.toContain('later Epoch')
   })
 })

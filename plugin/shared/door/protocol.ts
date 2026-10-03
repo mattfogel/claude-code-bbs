@@ -145,6 +145,10 @@ export type PlayerSnapshot = {
   /** Id of the last log entry the player has seen. */
   lastSeenLog: number
   requestsToday: number
+  /** A limpet is clamped to the hull (Class 0 ports and the Drydock remove it). */
+  limpet: boolean
+  /** Hostile fighters hold this sector: only attack, retreat or surrender work until they are gone or paid. */
+  blocked: boolean
 }
 
 export type PortSighting = { name: string; class: PortClassId; destroyed?: boolean; buildingDays?: number }
@@ -222,6 +226,18 @@ export type DoorEvent =
   | { kind: 'busted'; expLost: number; holdsLost: number }
   | { kind: 'robbed'; credits: number }
   | { kind: 'stolen'; commodity: Commodity; qty: number }
+  /** Fighters or mines taken back aboard (and any toll collected). */
+  | { kind: 'collected'; what: string; count: number; credits?: number }
+  /** A retreat to the previous sector. */
+  | { kind: 'retreat'; to: number }
+  /** Out of action until `until` (ISO); `by` killed you, if anyone. */
+  | { kind: 'dead'; until: string; by?: string }
+  /** A mine disruptor fired into `sector`. */
+  | { kind: 'disrupted'; sector: number; mines: number; limpets: number }
+  /** The activated limpet scan: ships carrying your limpets. */
+  | { kind: 'limpets'; rows: { name: string; sector: number }[] }
+  /** The Marshal's ten most wanted. */
+  | { kind: 'wanted'; rows: { name: string; reward: number }[] }
   | { kind: 'xp'; exp: number; align: number; reason: string }
   | { kind: 'rank'; title: string }
   /** A hail, a corp memo, or a report from deployed fighters (`type`, since `kind` is the tag). */
@@ -274,7 +290,8 @@ export type BankRequest =
   | { op: 'deposit' | 'withdraw'; amount: number }
   | { op: 'transfer'; amount: number; to: string }
 export type AnnounceRequest = { text: string }
-export type ScanRequest = { kind: 'density' | 'holo' }
+/** `limpet` is the activated limpet scan: free, needs a limpet of yours on a hull. */
+export type ScanRequest = { kind: 'density' | 'holo' | 'limpet' }
 /** `path` excludes the current sector. */
 export type ProbeRequest = { path: number[] }
 export type AvoidsRequest = { set: number[] }
@@ -293,8 +310,14 @@ export type MarshalRequest =
   | { op: 'commission' }
   | { op: 'reward'; target: string; amount: number }
   | { op: 'claim' }
-export type BackroomRequest = { password?: string; op: 'hit' | 'collect' | 'alias'; target?: string; amount?: number; alias?: string }
+  | { op: 'wanted' }
+/** Every Back Room request carries the password (the server holds no "inside" state). */
+export type BackroomRequest = { password: string; op: 'hit' | 'collect' | 'alias'; target?: string; amount?: number; alias?: string }
 export type BeaconRequest = { text: string }
+/** Fires a mine disruptor into an adjacent sector. */
+export type DisruptRequest = { sector: number }
+/** Old Sal at the Last Light. `trace` costs LAST_LIGHT.traceCost, `password` passwordCost; `swear` is once a day. */
+export type SalRequest = { op: 'trace'; target: string } | { op: 'password' } | { op: 'swear' } | { op: 'fortune' }
 
 /** Request body by command. */
 export type DoorRequests = {
@@ -321,20 +344,25 @@ export type DoorRequests = {
   marshal: MarshalRequest
   backroom: BackroomRequest
   beacon: BeaconRequest
+  disrupt: DisruptRequest
+  sal: SalRequest
 }
 
 export type DoorCommand = keyof DoorRequests
 
 export const DOOR_COMMANDS = [
   'create', 'move', 'dock', 'offer', 'skip', 'class0', 'outfit', 'shipwright', 'bank', 'announce', 'scan', 'probe', 'avoids',
-  'attack', 'retreat', 'surrender', 'deploy', 'collect', 'rob', 'steal', 'marshal', 'backroom', 'beacon',
+  'attack', 'retreat', 'surrender', 'deploy', 'collect', 'rob', 'steal', 'marshal', 'backroom', 'beacon', 'disrupt', 'sal',
 ] as const satisfies readonly DoorCommand[]
 
 /** The build phase each command belongs to. */
 export const DOOR_COMMAND_PHASE: Readonly<Record<DoorCommand, 1 | 2>> = {
   create: 1, move: 1, dock: 1, offer: 1, skip: 1, class0: 1, outfit: 1, shipwright: 1, bank: 1, announce: 1, scan: 1, probe: 1, avoids: 1,
-  attack: 2, retreat: 2, surrender: 2, deploy: 2, collect: 2, rob: 2, steal: 2, marshal: 2, backroom: 2, beacon: 2,
+  attack: 2, retreat: 2, surrender: 2, deploy: 2, collect: 2, rob: 2, steal: 2, marshal: 2, backroom: 2, beacon: 2, disrupt: 2, sal: 2,
 }
+
+/** The newest phase the server runs; commands from later phases answer "Not yet." */
+export const DOOR_BUILT_PHASE = 2
 
 export function isDoorCommand(s: string): s is DoorCommand {
   return (DOOR_COMMANDS as readonly string[]).includes(s)

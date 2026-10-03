@@ -86,13 +86,40 @@ describe('text', () => {
   })
 
   it('has help for every menu', () => {
-    for (const menu of ['command', 'computer', 'port', 'class0', 'drydock', 'outfitter', 'shipwright', 'bank', 'tavern']) {
+    for (const menu of ['command', 'computer', 'port', 'class0', 'drydock', 'outfitter', 'shipwright', 'bank', 'tavern', 'marshal', 'sal', 'backroom', 'fighters', 'mines']) {
       expect(HELP[menu]?.length, menu).toBeGreaterThan(0)
     }
     const keys = (menu: string) => HELP[menu].map(l => /<\|11(.)\|08>/.exec(l)?.[1])
     expect(keys('command')).toEqual(expect.arrayContaining(['M', 'D', 'P', 'S', 'C', 'I', '/', 'V', 'E', 'L', 'A', 'F', 'H', 'U', 'T', 'Q', '?']))
-    expect(keys('computer')).toEqual(['F', 'I', 'K', 'R', 'V', 'X', 'L', 'G', 'E', 'Q'])
-    expect(keys('drydock')).toEqual(['S', 'O', 'B', 'M', 'T', 'Q'])
+    expect(keys('command')).toEqual(expect.arrayContaining(['B', 'R', 'Y']))
+    expect(keys('computer')).toEqual(['F', 'I', 'K', 'R', 'V', 'X', 'L', 'G', 'E', 'T', 'Q'])
+    expect(keys('drydock')).toEqual(['S', 'O', 'B', 'M', 'T', 'L', 'Q'])
+    expect(keys('port')).toEqual(expect.arrayContaining(['T', 'R', 'S', 'Q']))
+    expect(keys('outfitter')).toEqual(expect.arrayContaining(['B', 'D', 'M', 'L', 'R']))
+    expect(keys('marshal')).toEqual(['A', 'P', 'W', 'C', 'Q'])
+    expect(keys('sal')).toEqual(['T', 'P', 'F', 'S', 'Q'])
+    expect(keys('backroom')).toEqual(['H', 'C', 'A', 'Q'])
+    expect(keys('fighters')).toEqual(['D', 'T', 'Q'])
+    expect(keys('mines')).toEqual(['C', 'D', 'T', 'S', 'Q'])
+  })
+
+  it('has the phase 2 keys live, not marked later', () => {
+    const later = (menu: string, key: string) => HELP[menu].find(l => l.includes(`<|11${key}|08>`))?.includes('(later)')
+    for (const key of ['A', 'F', 'H', 'B', 'R', 'Y']) expect(later('command', key), key).toBe(false)
+    for (const key of ['R', 'S']) expect(later('port', key), key).toBe(false)
+    expect(later('class0', 'L')).toBe(false)
+    expect(later('drydock', 'M')).toBe(false)
+    for (const key of ['S', 'B']) expect(later('tavern', key), key).toBe(false)
+    // The planets and corporations are still to come.
+    for (const key of ['L', 'U', 'T']) expect(later('command', key), key).toBe(true)
+  })
+
+  it('writes the conflict pages and drops the "later" asides', () => {
+    expect(INSTRUCTIONS.length).toBeGreaterThanOrEqual(8)
+    const all = INSTRUCTIONS.flat().map(l => l.replace(/\|[0-9]{2}/g, '')).join('\n')
+    for (const word of ['FIGHTING', 'FIGHTERS, MINES AND BEACONS', 'CONCORD SPACE AND THE LAW', 'Marshal', 'Old Sal', 'Back Room']) expect(all, word).toContain(word)
+    expect(all).not.toContain('(later)')
+    expect(all).not.toContain('and later worse')
   })
 
   it('fills log templates', () => {

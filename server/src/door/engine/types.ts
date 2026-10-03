@@ -43,7 +43,40 @@ export type PlayerRec = {
   /** UTC day number of the last daily-login award. */
   lastDay: number
   createdAt: number
+  // Phase 2 (old rows read as defaults).
+  /** Deaths on `deathDay` (a UTC day number). */
+  deaths?: number
+  deathDay?: number
+  /** ms; set while the pilot is out of action. */
+  deadUntil?: number
+  /** A limpet clamped to the hull, and whose it is. */
+  limpet?: { id: number; name: string }
+  /** The sector whose toll you paid (or surrendered to); cleared on entering a sector. */
+  paid?: number
+  /** Wrong Back Room passwords on `strikeDay`. */
+  strikes?: number
+  strikeDay?: number
+  /** UTC day of the last swear at Old Sal. */
+  swearDay?: number
 }
+
+export type DeployKind = 'fighters' | 'contact' | 'limpet'
+
+/** A row of the deploys table, with its owner's current name. */
+export type Deploy = {
+  id: number
+  sector: number
+  ownerId: number
+  ownerName: string
+  kind: DeployKind
+  count: number
+  mode: 'defensive' | 'offensive' | 'toll'
+  /** Credits collected by toll fighters. */
+  toll: number
+}
+
+/** A report for a player who was not there. */
+export type MailDraft = { playerId: number; from: string; text: string }
 
 /** One commodity's haggle in progress. */
 export type Negotiation = {
