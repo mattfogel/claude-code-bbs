@@ -247,6 +247,8 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 
 ## Phases
 
+What's built, how it behaves, and the next phase's checklist: [status.md](status.md).
+
 1. **Core (this build):** Big Bang; `map.json`; state; movement and autopilot; the sector display; density and holo scans; the computer (plotter, port reports, known universe, avoids, ship catalog, rank tables); docking, the haggle and trade experience; Class 0 purchases; the Drydock Shipwright, Outfitter (scanners, probes, beacons), Exchange Bank and Last Light announcements; turns; ranks and alignment; the daily log and rankings; the V screen; the title and new character screens; and the door entry on the main menu.
 2. **Conflict:** ship vs ship combat, pods and death, fighters and modes, contact mines and limpets, mine disruptors, Concord Space protection and the Marshals, rob and steal, the Marshal's Office and the Back Room, bounties, Deadman Charges, beacons.
 3. **Planets:** Seed Torpedoes, Terra colonists, production, citadels 1 to 6, Mass Drivers, planetary shields, interdictor, transporter, planetary jump, Cracker Charges, invading, planetary trade, port construction and upgrades.
