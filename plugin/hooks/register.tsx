@@ -9,9 +9,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Account, Action, BoardIndex, Outbox, BoardThreadFile, Feed, Presence, ScanItem, SysopOp, ThreadView, View } from '../types'
+import type { Account, Action, BoardIndex, Outbox, BoardThreadFile, DoorCmd, Feed, Presence, ScanItem, SysopOp, ThreadView, View } from '../types'
 import { LIMITS, boardIndexKey, boardThreadKey, describeStatus, encodeStatus, leadingZeroBits, powInput, type ClaudeStatus } from '../shared/protocol'
 import { sanitizeUserText, stripPipe } from '../shared/pipe'
+import { SEASON_RE, doorMapKey, doorNewsKey, type DoorMap, type DoorNews, type DoorReply, type DoorStateReply } from '../shared/door/protocol'
+import { appendLines, applyError, applyReply, boardOf, emptyKnown, newDoorView, plan, type DoorCtx } from '../client/door/session'
 
 type Dollar = EngineInterface
 
@@ -39,13 +41,18 @@ const etags = atom({ plugin: 'latent-space', key: 'etags' } as const, {} as Reco
 const threads = atom({ plugin: 'latent-space', key: 'threads' } as const, {} as Record<string, BoardThreadFile>)
 const presence = atom({ plugin: 'latent-space', key: 'presence' } as const, { sent: '', sentAt: 0, wanted: 'idle' } as Presence)
 const nudge = atom({ plugin: 'latent-space', key: 'nudge' } as const, '')
+// The door's own data, never handed to the screen: the star map, what the player knows, the news.
+const doorMap = atom({ plugin: 'latent-space', key: 'doorMap' } as const, {} as { map?: DoorMap })
+const doorKnown = atom({ plugin: 'latent-space', key: 'doorKnown' } as const, emptyKnown())
+const doorNews = atom({ plugin: 'latent-space', key: 'doorNews' } as const, {} as { news?: DoorNews })
 
 /**
  * Defaults, overridden at session start by LATENT_SPACE_API_URL, LATENT_SPACE_FEED_URL, LATENT_SPACE_MODEM
  * (a baud rate, or off), LATENT_SPACE_PAGER=off (no reply alerts while the pane is closed) and
- * LATENT_SPACE_NUDGE=off (no board line in the prompt hint during long turns).
+ * LATENT_SPACE_NUDGE=off (no board line in the prompt hint during long turns) and LATENT_SPACE_DOOR_SEASON
+ * (the door's season until the server names its own).
  */
-const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800, pager: true, nudge: true }
+const config = { apiUrl: 'https://bbs.mattfogel.com', feedUrl: 'https://feed.mattfogel.com/hub.json', baud: 28800, pager: true, nudge: true, doorSeason: 's1' }
 
 // Bookkeeping that may start over on a hot reload without harm.
 /** Main-loop tool calls still running, so parallel calls don't report "thinking" early. */
@@ -554,7 +561,114 @@ async function act($: Dollar, action: Action) {
       await notify($, r.ok ? 'Reported to the SysOp. Thanks.' : r.message, !r.ok)
       return
     }
+    case 'door':
+      await door($, action, action.echo ?? [])
+      return
   }
+}
+
+// ---- doors: HYPERPLANE -------------------------------------------------------
+
+/** The season's star map, fetched once and kept for the session. */
+async function loadDoorMap($: Dollar, season: string): Promise<DoorMap | undefined> {
+  const have = (await read($, doorMap)).map
+  if (have?.season === season) return have
+  const r = await fetchJson<DoorMap>($, feedFile(doorMapKey(season)), true)
+  if (r.status !== 'fresh' || !Array.isArray(r.data?.warps)) return undefined
+  await update($, doorMap, () => ({ map: r.data }))
+  return r.data
+}
+
+/** news.json, revalidated with If-None-Match. */
+async function loadDoorNews($: Dollar, season: string): Promise<DoorNews | undefined> {
+  const cached = (await read($, doorNews)).news
+  const mine = cached?.season === season ? cached : undefined
+  const r = await fetchJson<DoorNews>($, feedFile(doorNewsKey(season)), !mine)
+  if (r.status === 'fresh' && Array.isArray(r.data?.log)) {
+    await update($, doorNews, () => ({ news: r.data }))
+    return r.data
+  }
+  return mine
+}
+
+async function doorCtx($: Dollar, season?: string): Promise<DoorCtx> {
+  const d = (await read($, view)).door ?? newDoorView(config.doorSeason)
+  return {
+    season: season ?? d.season,
+    map: (await read($, doorMap)).map,
+    known: await read($, doorKnown),
+    snapshot: d.snapshot,
+    here: d.here,
+    news: (await read($, doorNews)).news,
+    ask: d.ask,
+  }
+}
+
+/**
+ * Runs one door command: the planner's lines first, then at most one request,
+ * then the reply's lines. Every command ends by bumping door.rev, which
+ * releases the screen's keys.
+ */
+async function door($: Dollar, c: DoorCmd, echo: string[]) {
+  const season = (await read($, view)).door?.season ?? config.doorSeason
+  if (c.cmd === 'plot' || c.cmd === 'probe' || (c.cmd === 'local' && (c.key === 'CI' || c.key === 'CK'))) await loadDoorMap($, season)
+  if (c.cmd === 'news' || (c.cmd === 'local' && c.key === 'V')) await loadDoorNews($, season)
+  const ctx = await doorCtx($)
+  const p = plan(ctx, c)
+  const now = await $.clock.now()
+  await update($, view, (v): View => {
+    const d = v.door ?? newDoorView(season)
+    return {
+      ...v,
+      door: {
+        ...d,
+        transcript: appendLines(d.transcript, echo, p.lines),
+        ask: p.ask === undefined ? d.ask : (p.ask ?? undefined),
+        phase: p.phase ?? d.phase,
+        board: c.cmd === 'news' ? boardOf(ctx.news, now) : d.board,
+        busy: !!p.request,
+        rev: p.request ? d.rev : d.rev + 1,
+      },
+    }
+  })
+  if (!p.request) return
+
+  const r = await api($, p.request.path, p.request.body, p.request.method)
+  if (!r.ok) {
+    const o = applyError(ctx, c, r.code, r.message)
+    if (o.phase === 'title') await notify($, stripPipe(o.lines.join(' ')), true)
+    await update($, view, (v): View => {
+      const d = v.door ?? newDoorView(season)
+      return { ...v, door: { ...d, transcript: appendLines(d.transcript, o.lines), ask: o.ask === undefined ? d.ask : (o.ask ?? undefined), phase: o.phase ?? d.phase, busy: false, rev: d.rev + 1 } }
+    })
+    return
+  }
+  const reply = r.data as unknown as DoorReply | DoorStateReply
+  // The server names the season; the first visit fetches its map and news.
+  const actual = reply.snapshot?.season && SEASON_RE.test(reply.snapshot.season) ? reply.snapshot.season : season
+  if (c.cmd === 'enter' || c.cmd === 'create') {
+    await loadDoorNews($, actual)
+    await loadDoorMap($, actual)
+  }
+  const o = applyReply(await doorCtx($, actual), c, reply)
+  if (o.known) await update($, doorKnown, () => o.known ?? emptyKnown(actual))
+  await update($, view, (v): View => {
+    const d = v.door ?? newDoorView(actual)
+    return {
+      ...v,
+      door: {
+        ...d,
+        season: actual,
+        snapshot: reply.snapshot ?? d.snapshot,
+        here: reply.here ?? d.here,
+        transcript: appendLines(d.transcript, o.lines),
+        ask: o.ask === undefined ? d.ask : (o.ask ?? undefined),
+        phase: o.phase ?? d.phase,
+        busy: false,
+        rev: d.rev + 1,
+      },
+    }
+  })
 }
 
 /** Runs the actions of an outbox not run before, in order. */
@@ -605,6 +719,8 @@ export const register: Register = on => {
     if (modem) config.baud = modem === 'off' ? 0 : Number(modem) || config.baud
     config.pager = (await $.env.get('LATENT_SPACE_PAGER')) !== 'off'
     config.nudge = (await $.env.get('LATENT_SPACE_NUDGE')) !== 'off'
+    const season = await $.env.get('LATENT_SPACE_DOOR_SEASON')
+    if (season && SEASON_RE.test(season)) config.doorSeason = season
     await $.command.register({ name: 'bbs', description: 'Call lATENT sPACE, the BBS in a pane' })
     const acct = await account($)
     const lastRead = ((await $.store.get('lastRead')) ?? {}) as Record<string, number>

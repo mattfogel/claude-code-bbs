@@ -9,12 +9,13 @@ import { LIMITS, decodeStatus, describeStatus, isValidHandle, normalizeHandle } 
 import { logo } from './logo'
 import { drawSysop, isSysop, isSysopScreen, pressSysop, type Confirm, type Form, type SysopScreen } from './sysop'
 import { drawMessages, isMessageScreen, openThreads, pressMessages, type Editor, type MessageScreen, type Reader } from './messages'
+import { doorOwnsFoot, drawDoor, isDoorScreen, pressDoor, type DoorLocal, type DoorScreen } from './door/screen'
 import { LIGHTBAR, ago, center, clean, footer, frame, header, hotkey, pad, panel, panelItem, plain, type Item } from './ui'
 
 /** A key as the Client surface hands it (ClientKeyEvent). */
 export type ClientKey = { key: string; ctrl?: true; shift?: true; meta?: true }
 
-export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye' | MessageScreen | SysopScreen
+export type Screen = 'matrix' | 'apply' | 'logon' | 'main' | 'oneliners' | 'rumors' | 'callers' | 'who' | 'stats' | 'goodbye' | MessageScreen | SysopScreen | DoorScreen
 
 type InputPurpose = 'handle' | 'location' | 'oneliner' | 'rumor'
 
@@ -48,6 +49,8 @@ export type AppState = {
   /** The sysop form being filled in, and a pending Y/N. */
   form?: Form
   confirm?: Confirm
+  /** The door game's local state (page, prompt, typed buffer). */
+  door?: DoorLocal
 }
 
 export const initialState = (seed = 0): AppState => ({ screen: 'matrix', sel: 0, input: null, apply: { handle: '', location: '' }, rumorSeed: seed, seen: 0, onBoard: false, list: 0, scan: 0 })
@@ -58,7 +61,7 @@ export const MATRIX: Item[] = [
   { key: 'w', label: "Who's On" },
 ]
 
-/** The main menu: two panels of five, then Goodbye on its own. */
+/** The main menu: two panels of five, then Doors and Goodbye on the bottom row. */
 export const MAIN: (Item & { screen: Screen })[] = [
   { key: 'm', label: 'Messages', screen: 'threads' },
   { key: 'n', label: 'Newscan', screen: 'newscan' },
@@ -70,9 +73,11 @@ export const MAIN: (Item & { screen: Screen })[] = [
   { key: 'l', label: 'Last Callers', screen: 'callers' },
   { key: 'w', label: "Who's Online", screen: 'who' },
   { key: 's', label: 'Stats', screen: 'stats' },
+  { key: 'd', label: 'Doors', screen: 'doors' },
   { key: 'g', label: 'Goodbye', screen: 'goodbye' },
 ]
 const PANEL = 5
+const DOORS_ITEM = PANEL * 2
 const GOODBYE = MAIN.length - 1
 
 /** Session length shown as time left, as a board's per-call limit was. Never enforced. */
@@ -99,6 +104,7 @@ export function press(state: AppState, key: ClientKey, view: View, rand: () => n
   if (s.input) return typing(s, key, view)
   if (isMessageScreen(s.screen)) return pressMessages(s, key, view, width)
   if (isSysopScreen(s.screen)) return pressSysop(s, key, view)
+  if (isDoorScreen(s.screen)) return pressDoor(s, key, view, now)
 
   switch (s.screen) {
     case 'matrix': {
@@ -185,19 +191,21 @@ function enterMain(s: AppState, index: number, view: View): Step {
   return { state: next }
 }
 
-/** Lightbar moves on the main menu: down a panel, across panels, Goodbye below both. */
+/** Lightbar moves on the main menu: down a panel, across panels, Doors and Goodbye below them. */
 function moveMain(sel: number, key: ClientKey): number {
-  const col = sel === GOODBYE ? -1 : Math.floor(sel / PANEL)
+  const bottom = sel >= DOORS_ITEM
+  // The bottom row sits under the panels: Doors under the left, Goodbye under the right.
+  const col = bottom ? sel - DOORS_ITEM : Math.floor(sel / PANEL)
   const row = sel % PANEL
   switch (key.key) {
     case 'down':
-      return col < 0 ? 0 : row === PANEL - 1 ? GOODBYE : sel + 1
+      return bottom ? col * PANEL : row === PANEL - 1 ? DOORS_ITEM + col : sel + 1
     case 'up':
-      return col < 0 ? PANEL - 1 : row === 0 ? GOODBYE : sel - 1
+      return bottom ? col * PANEL + PANEL - 1 : row === 0 ? DOORS_ITEM + col : sel - 1
     case 'left':
     case 'right':
     case 'tab':
-      return col < 0 ? sel : (sel + PANEL) % (PANEL * 2)
+      return bottom ? DOORS_ITEM + (1 - col) : (sel + PANEL) % (PANEL * 2)
   }
   return sel
 }
@@ -298,7 +306,7 @@ export function draw(state: AppState, view: View, width: number, height: number,
   frame.menu = menuName(state, base)
   const lines = pad(screenLines(state, view, w, body, now), body).slice(0, body)
   const msg = messageLine(state, view)
-  if (msg && !state.input && state.screen !== 'apply' && body > 1) lines[body - 1] = msg
+  if (msg && !state.input && state.screen !== 'apply' && !doorOwnsFoot(state, view) && body > 1) lines[body - 1] = msg
   const out = lines.map(l => fitPipe(`|07|16${l}`, w))
   out.push(...statusBar(view, w, now, state.onBoard ? base : undefined, barRows))
   return out.slice(-Math.max(1, height))
@@ -309,6 +317,7 @@ const MENU_NAMES: Partial<Record<Screen, string>> = {
   callers: 'Callers', who: "Who's On", stats: 'Stats', bases: 'Bases', editor: 'Editor', newscan: 'Newscan',
   vote: 'Voting', poll: 'Voting', top: 'Top Ten', goodbye: 'Goodbye',
   sysop: 'Sysop', sysConfs: 'Sysop', sysPolls: 'Sysop', sysForm: 'Sysop',
+  doors: 'Doors', door: 'HYPERPLANE',
 }
 
 function menuName(state: AppState, base: string | undefined): string {
@@ -320,6 +329,7 @@ function menuName(state: AppState, base: string | undefined): string {
 function screenLines(state: AppState, view: View, w: number, h: number, now: number): string[] {
   if (isMessageScreen(state.screen)) return drawMessages(state, view, w, h, now)
   if (isSysopScreen(state.screen)) return drawSysop(state, view, w, h)
+  if (isDoorScreen(state.screen)) return drawDoor(state, view, w, h, now)
   const feed = view.feed
   switch (state.screen) {
     case 'matrix': {
@@ -402,7 +412,10 @@ function screenLines(state: AppState, view: View, w: number, h: number, now: num
       const right = box('The Board', PANEL)
       if (side) left.forEach((l, i) => lines.push(` ${fitPipe(l, pw + 1)} ${right[i]}`))
       else lines.push(...left.map(l => ` ${l}`), ...right.map(l => ` ${l}`))
-      lines.push(` ${panelItem(MAIN[GOODBYE], state.sel === GOODBYE, 20)}`)
+      const doors = panelItem(MAIN[DOORS_ITEM], state.sel === DOORS_ITEM, 20)
+      const bye = panelItem(MAIN[GOODBYE], state.sel === GOODBYE, 20)
+      if (side) lines.push(` ${fitPipe(doors, pw + 1)}|16 ${bye}`)
+      else lines.push(` ${doors}`, ` ${bye}`)
       if (feed?.motd && h - lines.length > 3) lines.push('', `|07${clean(feed.motd, LIMITS.motdMax)}`)
       return [...pad(lines, h - 1).slice(0, h - 1), footer(`|07Command|08: |15${MAIN[state.sel]?.label ?? ''}`, w)]
     }

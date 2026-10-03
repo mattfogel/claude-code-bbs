@@ -5,6 +5,7 @@ import type { Feed, View } from '../plugin/types'
 import { draw, initialState, type Screen } from '../plugin/client/app'
 import { parsePipe } from '../plugin/shared/pipe'
 import { THEME } from '../plugin/client/theme'
+import { commandPrompt, courseLines, eventLines, sectorLines } from '../plugin/shared/door/format'
 
 const args = process.argv.slice(2).filter(a => !a.startsWith('--'))
 const width = Number(args[0] ?? 80)
@@ -70,8 +71,31 @@ const view: View = {
   newscan: { scanning: false, items: [{ slug: 'general', conference: 'General', thread: 3, subject: 'what are you building?', unread: 4 }, { slug: 'general', conference: 'General', thread: 2, subject: 'best Obv/2 mods', unread: 0 }] },
 }
 
+// HYPERPLANE: a trader docked at a port, mid-haggle, after a short flight.
+const ship = { type: 1, name: 'Nightjar', holds: 20, cargo: [0, 20, 0] as [number, number, number], colonists: 0, fighters: 30, shields: 0,
+  equipment: { contactMines: 0, limpets: 0, beacons: 0, seeds: 0, crackers: 0, deadman: 0, cloaks: 0, probes: 2, disruptors: 0, photons: 0, scanner: 'density' as const, planetScanner: false, lens: false, jump: 0 as const } }
+const snapshot = { v: 1 as const, season: 's1', id: 1, name: 'mattf', sector: 3554, prevSector: 412, turns: 187, turnsMax: 250, credits: 2412, bank: 0, experience: 40, alignment: 12,
+  timesBlownUp: 0, commissioned: false, ship, avoids: [], lastSeenLog: 0, requestsToday: 14 }
+const here = { id: 3554, region: 'uncharted' as const, port: { name: 'Kestrel Yard', class: 5 as const }, planets: [], traders: [{ name: 'Acid Burn', ship: 'Zero Cool', shipType: 8, fighters: 120 }],
+  ships: [], navhaz: 0, mines: [], hallucinations: [], marshals: [], warps: [412, 1877, 3009] }
+const report = { sector: 3554, name: 'Kestrel Yard', class: 5 as const, seenAt: ago(5), items: [{ status: 'selling' as const, trading: 2140, pct: 100 }, { status: 'buying' as const, trading: 1620, pct: 98 }, { status: 'selling' as const, trading: 1180, pct: 100 }] }
+const steps = [{ commodity: 1 as const, side: 'sell' as const, max: 20, defaultQty: 20, unitOffer: 20.6 }, { commodity: 0 as const, side: 'buy' as const, max: 20, defaultQty: 20, unitOffer: 14.8 }]
+const transcript = [
+  ...courseLines([1, 2, 412, 3554], 3, s => s < 100),
+  `${commandPrompt({ turns: 196, sector: 1 })}|15Y`,
+  ...eventLines({ kind: 'warp', from: 1, to: 2, turns: 3 }), ...eventLines({ kind: 'warp', from: 2, to: 412, turns: 3 }), ...eventLines({ kind: 'warp', from: 412, to: 3554, turns: 3 }),
+  ...eventLines({ kind: 'stop', sector: 3554, reason: 'arrived' }),
+  ...sectorLines(here, s => s !== 1877), '',
+  `${commandPrompt(snapshot)}|15P`,
+  ...eventLines({ kind: 'dock', report, turnsLeft: 187, steps }, { snapshot }),
+]
+const doorView: View = { ...view, door: { season: 's1', phase: 'ready', rev: 3, transcript, busy: false, snapshot, here, ask: { kind: 'trade', steps, at: now, round: 0, trading: [2140, 1620, 1180] },
+  board: { log: [{ id: 1, ts: ago(3600), kind: 'bang', text: '|11The Big Bang! |07Epoch 1 begins: 1000 sectors.' }, { id: 2, ts: ago(60), kind: 'join', text: '|10mattf |07takes the helm of the |11Nightjar|07.' }],
+    rankings: [{ name: 'Acid Burn', rank: 6, title: 'Leading Spacer', experience: 88, alignment: 30, netWorth: 90000 }, { name: 'mattf', rank: 5, title: 'Rigger', experience: 40, alignment: 12, netWorth: 50000 }] } } }
+const doorPages = ['title', 'instructions', 'log', 'rankings', 'game'] as const
+
 const rgb = (n: number) => `${(n >> 16) & 255};${(n >> 8) & 255};${n & 255}`
-const screens: Screen[] = ['matrix', 'apply', 'logon', 'main', 'oneliners', 'rumors', 'callers', 'who', 'stats', 'bases', 'threads', 'read', 'editor', 'newscan', 'vote', 'poll', 'top', 'goodbye']
+const screens: Screen[] = ['matrix', 'apply', 'logon', 'main', 'oneliners', 'rumors', 'callers', 'who', 'stats', 'bases', 'threads', 'read', 'editor', 'newscan', 'vote', 'poll', 'top', 'goodbye', 'doors']
 const extra: Partial<Record<Screen, object>> = {
   apply: { input: { purpose: 'handle', value: 'Zer' } },
   threads: { base: 'general' },
@@ -89,6 +113,18 @@ for (const screen of screens) {
   }
   console.log(`\n--- ${screen} ---`)
   for (const line of draw(state, screen === 'apply' ? { ...view, phase: 'new', me: undefined } : view, width, height, now)) {
+    console.log(parsePipe(line, {}, 7, 0, THEME).map(c => `\x1b[38;2;${rgb(c.fg)};48;2;${rgb(c.bg)}m${c.ch}`).join('') + '\x1b[0m')
+  }
+}
+for (const page of doorPages) {
+  const state = { ...initialState(), screen: 'door' as const, onBoard: true, door: { page, prompt: { kind: 'command' as const }, buf: '', scratch: [] } }
+  if (process.argv.includes('--pipe')) {
+    for (const line of draw({ ...state, loggedAt: now - 18 * 60_000 }, doorView, width, height, now)) console.log(line)
+    console.log('')
+    continue
+  }
+  console.log(`\n--- door: ${page} ---`)
+  for (const line of draw(state, doorView, width, height, now)) {
     console.log(parsePipe(line, {}, 7, 0, THEME).map(c => `\x1b[38;2;${rgb(c.fg)};48;2;${rgb(c.bg)}m${c.ch}`).join('') + '\x1b[0m')
   }
 }
