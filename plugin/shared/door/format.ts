@@ -7,6 +7,7 @@ import {
   ALIGN_WORDS, COMMODITIES, COMMODITY_SHORT, ITEMS, PORT_CLASSES, RANKS_EVIL, RANKS_GOOD, SHIPS,
   alignWord, rankExp, rankOf, rankTitle, shipCost, type Commodity, type PortClassId,
 } from './data'
+import { DEATH } from './text'
 import type {
   DensityRow, DoorEvent, GameStatus, LogEntry, PlayerSnapshot, PortReport, SectorView, StopReason, TradeStep, TraderRanking,
 } from './protocol'
@@ -18,7 +19,7 @@ export const num = (n: number) => Math.round(n).toLocaleString('en-US')
 const plural = (n: number, one: string, many = one + 's') => (n === 1 ? one : many)
 
 /** User-supplied text (names, beacons) with any pipe codes taken out. */
-const bare = (s: unknown) => String(s ?? '').replace(/\|[0-9]{2}/g, '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+export const bare = (s: unknown) => String(s ?? '').replace(/\|[0-9]{2}/g, '').replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
 /** A sector-display label: 8 wide, then ': ', so values start at column 11. */
 export const label = (l: string) => `|10${l.padEnd(8)}|14: `
@@ -181,6 +182,7 @@ export function eventLines(ev: DoorEvent, ctx: EventCtx = {}): string[] {
       if (ev.reason === 'arrived') return [`|10Arrived in sector |11${ev.sector}|10.`, '']
       if (ev.reason === 'turns') return [`|12Out of turns. The autopilot holds in sector ${ev.sector}.`, '']
       if (ev.reason === 'dead') return ['|12Your ship is lost.', '']
+      if (ev.reason === 'fighters' || ev.reason === 'toll' || ev.reason === 'blocked') return [`|12Halted in sector ${ev.sector} by ${STOPS[ev.reason]}.`, '']
       return [`|14Autopilot halted in sector |11${ev.sector}|14: ${STOPS[ev.reason]} ahead.`, '']
     }
     case 'navhaz':
@@ -192,7 +194,9 @@ export function eventLines(ev: DoorEvent, ctx: EventCtx = {}): string[] {
     case 'toll':
       return [ev.paid ? `|14You pay a toll of ${num(ev.amount)} credits.` : `|12You can't cover the ${num(ev.amount)} credit toll.`]
     case 'fightersEncounter':
-      return [`|12${num(ev.count)} ${ev.mode} fighters belonging to ${bare(ev.owner)} hold this sector.`]
+      return [ev.mode === 'offensive'
+        ? `|12${num(ev.count)} offensive fighters belonging to ${bare(ev.owner)} open fire as you arrive.`
+        : `|12${num(ev.count)} ${ev.mode} fighters belonging to ${bare(ev.owner)} hold this sector.`]
     case 'dock': {
       const out = ['', ...portReportLines(ev.report, ctx.snapshot?.ship.cargo), '', `|10One turn used, |14${num(ev.turnsLeft)}|10 left.`]
       if (ctx.snapshot) out.push(`|10You have |14${num(ctx.snapshot.credits)}|10 credits and |14${holdsFree(ctx.snapshot)}|10 empty cargo holds.`)
@@ -222,6 +226,7 @@ export function eventLines(ev: DoorEvent, ctx: EventCtx = {}): string[] {
     case 'bought':
       if (ev.what === 'announcement') return [`|10Your announcement goes out for |14${num(ev.cost)}|10 credits.`]
       if (ev.what === 'registration') return [`|10The new name is painted on for |14${num(ev.cost)}|10 credits.`]
+      if (ev.what === 'limpet removal') return [`|10The limpet is pried off your hull for |14${num(ev.cost)}|10 credits.`]
       return [`|10Bought |14${num(ev.qty)}|10 ${ev.what} for |14${num(ev.cost)}|10 credits.`]
     case 'density':
       return densityLines(ev.rows, ctx.explored)
@@ -234,10 +239,11 @@ export function eventLines(ev: DoorEvent, ctx: EventCtx = {}): string[] {
       return out
     }
     case 'attack': {
-      const out = [`|10You send |14${num(ev.sent)}|10 fighters at ${bare(ev.target)}: |14${num(ev.killed)}|10 destroyed, |14${num(ev.shieldsLost)}|10 shield points down, |14${num(ev.lost)}|10 lost.`]
-      if (ev.destroyed) out.push(`|14${bare(ev.target)} is destroyed.`)
-      if (ev.captured) out.push(`|14${bare(ev.target)} is yours.`)
-      if (ev.fled) out.push(`|14${bare(ev.target)} breaks off and runs.`)
+      const who = ev.target === '*fighters' ? 'the sector fighters' : bare(ev.target)
+      const out = [`|10You send |14${num(ev.sent)}|10 fighters at ${who}: |14${num(ev.killed)}|10 destroyed, |14${num(ev.shieldsLost)}|10 shield points down, |14${num(ev.lost)}|10 lost.`]
+      if (ev.destroyed) out.push(`|14${who === 'the sector fighters' ? 'The sector fighters are' : `${who} is`} destroyed.`)
+      if (ev.captured) out.push(`|14${who} is yours.`)
+      if (ev.fled) out.push(`|14${who} breaks off and runs.`)
       if (ev.salvageCredits) out.push(`|10You salvage |14${num(ev.salvageCredits)}|10 credits.`)
       return out
     }
@@ -246,7 +252,25 @@ export function eventLines(ev: DoorEvent, ctx: EventCtx = {}): string[] {
     case 'podded':
       return [`|12Your ship is destroyed${ev.by ? ` by ${bare(ev.by)}` : ''}. The escape pod fires; you come to in sector ${ev.sector}.`]
     case 'deployed':
-      return [`|10${num(ev.count)} ${ev.what} deployed${ev.mode ? ` (${ev.mode})` : ''}.`]
+      return [`|10${num(ev.count)} ${bare(ev.what)} deployed${ev.mode ? ` (${ev.mode})` : ''}.`]
+    case 'collected':
+      return [`|10You take back |14${num(ev.count)}|10 ${bare(ev.what)}.`, ...(ev.credits ? [`|14${num(ev.credits)}|10 credits of tolls come aboard with them.`] : [])]
+    case 'retreat':
+      return [`|14You back away and run for sector |11${ev.to}|14.`]
+    case 'dead':
+      return [...(ev.by ? [`|12${bare(ev.by)} finishes your ship.`] : []), ...DEATH.outForTheDay]
+    case 'disrupted':
+      return [ev.mines + ev.limpets
+        ? `|10The disruptor goes off in sector |11${ev.sector}|10: |14${num(ev.mines)}|10 ${plural(ev.mines, 'mine')} and |14${num(ev.limpets)}|10 ${plural(ev.limpets, 'limpet')} destroyed.`
+        : `|10The disruptor goes off in sector |11${ev.sector}|10 and finds nothing to destroy.`]
+    case 'limpets':
+      return ev.rows.length
+        ? ['|10Your limpets report:', ...ev.rows.map(r => `|11${bare(r.name).padEnd(20)} |10in sector |14${r.sector}`)]
+        : ['|08None of your limpets is clamped to a ship.']
+    case 'wanted':
+      return ev.rows.length
+        ? ['|10<Most wanted>', ...ev.rows.map((r, i) => `|14${String(i + 1).padStart(3)} |11${bare(r.name).padEnd(20)} |14${num(r.reward).padStart(10)}|10 cr`)]
+        : ['|08Nobody is wanted at the moment.']
     case 'busted':
       return [`|12Busted! You lose ${num(ev.expLost)} experience and ${num(ev.holdsLost)} ${plural(ev.holdsLost, 'hold')}.`]
     case 'robbed':
@@ -304,6 +328,7 @@ export function quickStatsLines(s: PlayerSnapshot): string[] {
     ` ${quickStats(s)}`,
     ` ${[f('Col', s.ship.colonists), f('Prb', e.probes), f('LRS', lrs), f('Lens', e.lens ? 'Yes' : 'No'), f('Bank', s.bank), f('Aln', s.alignment), f('Exp', s.experience)].join(sep)}`,
     ` ${[f('Corp', s.corp?.name ? bare(s.corp.name) : 'None'), f('Ship', `${s.ship.type} ${(SHIPS[s.ship.type]?.name ?? '?').slice(0, 10)}`), f('Turns/warp', SHIPS[s.ship.type]?.turnsPerWarp ?? 0)].join(sep)}`,
+    ` ${[f('CMn', e.contactMines), f('LMn', e.limpets), f('Bcn', e.beacons), f('Dis', e.disruptors), f('Ddm', e.deadman), f('Limpet', s.limpet ? 'Yes' : 'No'), f('Held', s.blocked ? 'Yes' : 'No')].join(sep)}`,
   ]
 }
 
@@ -314,6 +339,13 @@ export function shipInfoLines(s: PlayerSnapshot): string[] {
   const e = s.ship.equipment
   const c = s.ship.cargo
   const special = [e.scanner === 'holo' ? 'Holo Scanner' : e.scanner === 'density' ? 'Density Scanner' : '', e.lens ? 'Haggle Lens' : '', e.probes ? `${e.probes} Ghost ${plural(e.probes, 'Probe')}` : ''].filter(Boolean)
+  const deploy = [
+    e.contactMines ? `${e.contactMines} Contact` : '',
+    e.limpets ? `${e.limpets} Limpet` : '',
+    e.beacons ? `${e.beacons} Beacon` : '',
+    e.disruptors ? `${e.disruptors} Disruptor` : '',
+    e.deadman ? `${e.deadman} Deadman` : '',
+  ].filter(Boolean)
   return [
     infoRow('Trader Name', `|11${bare(s.name)}`),
     infoRow('Rank and Exp', `|14${num(s.experience)}|10 points, Alignment=|14${num(s.alignment)} |11${alignWord(s.alignment)}`),
@@ -329,6 +361,9 @@ export function shipInfoLines(s: PlayerSnapshot): string[] {
     infoRow('Fighters', `|14${num(s.ship.fighters)}`),
     infoRow('Shield points', `|14${num(s.ship.shields)}`),
     infoRow('Equipment', special.length ? `|11${special.join('|10, |11')}` : '|08none'),
+    infoRow('Deployables', deploy.length ? `|11${deploy.join('|10, |11')}` : '|08none'),
+    ...(s.limpet ? [infoRow('Hull', '|12A limpet is clamped to it. Class 0 ports remove it.')] : []),
+    ...(s.blocked ? [infoRow('Held', '|12Hostile fighters hold this sector: attack, retreat or yield.')] : []),
     infoRow('Credits', `|14${num(s.credits)}${s.bank ? `|10 (|14${num(s.bank)}|10 in the bank)` : ''}`),
   ]
 }
@@ -362,8 +397,8 @@ export function alignmentWordsLine(): string {
   return `|10Alignment runs |12${ALIGN_WORDS[0]}|10 to |11${ALIGN_WORDS[ALIGN_WORDS.length - 1]}|10.`
 }
 
-/** The Outfitter's phase-1 stock. */
-export function outfitterLines(s: PlayerSnapshot, phase = 1): string[] {
+/** The Outfitter's stock built so far. */
+export function outfitterLines(s: PlayerSnapshot, phase = 2): string[] {
   const out = ['|10<Outfitter>  What we have in stock:', '']
   for (const it of ITEMS) {
     if (it.phase > phase) continue

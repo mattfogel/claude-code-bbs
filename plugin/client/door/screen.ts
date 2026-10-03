@@ -6,17 +6,18 @@
 // the lines typed for it, and keys wait until view.door.rev moves past it.
 
 import type { AppState, ClientKey, Screen, Step } from '../app'
-import type { Action, DoorAsk, DoorCmd, DoorView, View } from '../../types'
-import { COMMODITIES, GAME, ITEMS, SHIPS, holdsCost, type Commodity, type ItemId } from '../../shared/door/data'
-import { DOOR_LIMITS } from '../../shared/door/protocol'
+import type { Action, DoorAsk, DoorCmd, DoorView, PlayerSnapshot, View } from '../../types'
+import { AWARDS, BACKROOM, CLASS0, COMMODITIES, GAME, ITEMS, LAST_LIGHT, ROB, SHIPS, holdsCost, type Commodity, type ItemId } from '../../shared/door/data'
+import { DOOR_LIMITS, type FighterMode, type MineKind, type SectorView } from '../../shared/door/protocol'
+import { OLD_SAL } from '../../shared/door/text'
 import {
-  commandPrompt, counterLine, num, openingFigure, outfitterLines, quickStats, rankingLines, shipCatalogLines, logLines, warpList,
+  bare, commandPrompt, counterLine, holdsFree, num, openingFigure, outfitterLines, quickStats, rankingLines, shipCatalogLines, logLines, warpList,
 } from '../../shared/door/format'
 import { LIMITS } from '../../shared/protocol'
 import { fitPipe, visibleLength } from '../../shared/pipe'
 import { LIGHTBAR, center, footer, header, pad } from '../ui'
 import { newDoorView } from './session'
-import { DRYDOCK_HELP, INSTRUCTION_PAGES, titleArt } from './content'
+import { DRYDOCK_HELP, INSTRUCTION_PAGES, menuHelp, titleArt } from './content'
 
 export const DOOR_SCREENS = ['doors', 'door'] as const
 export type DoorScreen = (typeof DOOR_SCREENS)[number]
@@ -27,7 +28,10 @@ export const DOORS = [{ key: '1', title: GAME.title, blurb: 'Trade, haggle and e
 
 export type DoorPage = 'title' | 'instructions' | 'log' | 'rankings' | 'game'
 
-type Venue = 'top' | 'yard' | 'outfit' | 'bank' | 'tavern'
+type Venue = 'top' | 'yard' | 'outfit' | 'bank' | 'tavern' | 'marshal' | 'sal'
+
+/** Something A can shoot at: a trader, the fighters that hold the sector (`*fighters`), or a Marshal. */
+export type AttackTarget = { name: string; label: string; marshal?: boolean }
 
 /** The prompt on screen. Kinds tied to a hooks-set question (trade, class0, drydock) only apply while it is open. */
 export type DoorPrompt =
@@ -55,6 +59,33 @@ export type DoorPrompt =
   | { kind: 'bankTo' }
   | { kind: 'bankAmt'; op: 'deposit' | 'withdraw' | 'transfer'; to?: string }
   | { kind: 'announce' }
+  // Phase 2: combat, deployables, crime, the Marshal's Office, Old Sal and the Back Room.
+  | { kind: 'attackWho'; targets: AttackTarget[] }
+  | { kind: 'attackSure'; target: AttackTarget }
+  | { kind: 'attackFighters'; target: AttackTarget; max: number }
+  | { kind: 'fighters' }
+  | { kind: 'fDeployQty'; max: number }
+  | { kind: 'fDeployMode'; count: number }
+  | { kind: 'fTakeQty'; max: number }
+  | { kind: 'mines' }
+  | { kind: 'mineOp'; mine: MineKind }
+  | { kind: 'mineQty'; mine: MineKind; op: 'deploy' | 'take'; max: number }
+  | { kind: 'disrupt' }
+  | { kind: 'beaconText' }
+  | { kind: 'yield' }
+  | { kind: 'portMenu' }
+  | { kind: 'robAmt' }
+  | { kind: 'stealWhat' }
+  | { kind: 'stealQty'; commodity: Commodity; max: number }
+  | { kind: 'rewardTarget' }
+  | { kind: 'rewardAmt'; target: string }
+  | { kind: 'salTarget' }
+  | { kind: 'brPass' }
+  /** Inside the Back Room: `pw` is kept here and sent with every request, as the server holds no "inside" state. */
+  | { kind: 'back'; pw: string }
+  | { kind: 'brTarget'; pw: string }
+  | { kind: 'brAmt'; pw: string; target: string }
+  | { kind: 'brAlias'; pw: string }
 
 export type DoorLocal = {
   page: DoorPage
@@ -73,9 +104,9 @@ export type DoorLocal = {
 const WAIT_MS = 20_000
 const SCRATCH_MAX = 120
 const CMD: DoorPrompt = { kind: 'command' }
-const DRYDOCK_KINDS = ['dock', 'yardShip', 'yardName', 'rename', 'outfitQty', 'bankTo', 'bankAmt', 'announce']
+const DRYDOCK_KINDS = ['dock', 'yardShip', 'yardName', 'rename', 'outfitQty', 'bankTo', 'bankAmt', 'announce', 'rewardTarget', 'rewardAmt', 'salTarget', 'brPass', 'back', 'brTarget', 'brAmt', 'brAlias']
 /** Later systems' keys: answered, not ignored. */
-const LATER = 'afghjklnortuwxyz'
+const LATER = 'gjklnotuwxz'
 
 export const initialDoor = (): DoorLocal => ({ page: 'title', prompt: CMD, buf: '', scratch: [] })
 
@@ -120,6 +151,22 @@ export function effectivePrompt(d: DoorLocal, dv: DoorView): DoorPrompt {
   return p
 }
 
+/** What A can shoot at here: traders, hostile sector fighters, then any Marshals. */
+export function attackTargets(here: SectorView | undefined, me: string): AttackTarget[] {
+  if (!here) return []
+  const out: AttackTarget[] = here.traders.filter(t => t.name !== me).map(t => ({ name: t.name, label: `|11${bare(t.name)}|10, ${num(t.fighters)} ftrs, ${bare(t.ship)}` }))
+  const f = here.fighters
+  if (f && !f.isYours && !f.isCorp) out.push({ name: '*fighters', label: `|12The sector fighters|10 (${num(f.count)} of ${bare(f.owner)})` })
+  for (const m of here.marshals) out.push({ name: m, label: `|12${bare(m)}|10, a Marshal`, marshal: true })
+  return out
+}
+
+/** The most fighters one attack can send: those aboard, up to the hull's limit. */
+export const attackMax = (s: PlayerSnapshot) => Math.min(s.ship.fighters, SHIPS[s.ship.type]?.fightersPerAttack ?? s.ship.fighters)
+
+const MINE_NAME: Record<MineKind, string> = { contact: 'Contact Mines', limpet: 'Limpet Mines' }
+const aboard = (s: PlayerSnapshot, m: MineKind) => (m === 'contact' ? s.ship.equipment.contactMines : s.ship.equipment.limpets)
+
 type Shown = { lead: string[]; label: string; max: number; digits?: boolean; text?: boolean }
 
 const CLASS0_WHAT = ['cargo holds', 'fighters', 'shield points'] as const
@@ -148,7 +195,7 @@ export function shown(p: DoorPrompt, dv: DoorView): Shown {
   const q = (t: string, def?: string | number, end = '? ') => `|13${t}${def !== undefined ? ` |14[${def}]` : ''}|13${def !== undefined ? end : ` ${end}`}`
   switch (p.kind) {
     case 'command':
-      return { lead: [], label: commandPrompt(at), max: 1 }
+      return { lead: s?.blocked ? ['|12Hostile fighters hold this sector: (A)ttack, (R)etreat or (Y)ield.'] : [], label: commandPrompt(at), max: 1 }
     case 'move':
       return p.quick ? { lead: [], label: commandPrompt(at), max: 5, digits: true } : { lead: [], label: q('To which sector'), max: 5, digits: true }
     case 'quit':
@@ -164,7 +211,7 @@ export function shown(p: DoorPrompt, dv: DoorView): Shown {
     case 'cavoid':
       return { lead: [], label: q('Avoid which sector (0 clears the list)'), max: 5, digits: true }
     case 'scan':
-      return { lead: [], label: q('(D)ensity or (H)olo scan', 'D'), max: 1 }
+      return { lead: [], label: q('(D)ensity, (H)olo or (L)impet scan', 'D'), max: 1 }
     case 'probe':
       return { lead: [`|10You have |14${s?.ship.equipment.probes ?? 0}|10 Ghost Probes.`], label: q('Send the probe to which sector'), max: 5, digits: true }
     case 'engage':
@@ -189,7 +236,8 @@ export function shown(p: DoorPrompt, dv: DoorView): Shown {
     case 'class0': {
       const ask = dv.ask as Extract<DoorAsk, { kind: 'class0' }>
       const most = class0Max(dv, ask, p.buy, p.field)
-      return { lead: [`|10You can take |14${num(most)}|10 more.`], label: q(`How many ${CLASS0_WHAT[p.field]} do you want to buy`, 0), max: 6, digits: true }
+      const limpet = p.field === 0 && s?.limpet ? [`|12A limpet is clamped to your hull. Press L to have it removed for ${num(CLASS0.limpetRemoval)} credits.`] : []
+      return { lead: [`|10You can take |14${num(most)}|10 more.`, ...limpet], label: q(`How many ${CLASS0_WHAT[p.field]} do you want to buy`, 0), max: 6, digits: true }
     }
     case 'dock': {
       const labels: Record<Venue, string> = {
@@ -197,7 +245,9 @@ export function shown(p: DoorPrompt, dv: DoorView): Shown {
         yard: '<Shipwright> (B)uy, (R)ename, (L)ist, (Q)uit',
         outfit: '<Outfitter> Which item? (Q to leave)',
         bank: '<Exchange Bank> (D)eposit, (W)ithdraw, (T)ransfer, (E)xamine, (Q)uit',
-        tavern: '<The Last Light> (A)nnouncement, (Q)uit',
+        tavern: '<The Last Light> (A)nnouncement, Old (S)al, (B)ack Room, (Q)uit',
+        marshal: '<Marshal\'s Office> (A)pply, (P)ost reward, (W)anted, (C)laim, (Q)uit',
+        sal: '<Old Sal> (T)race, (P)assword, (F)ortune, (S)wear, (Q)uit',
       }
       return { lead: [], label: q(labels[p.venue]), max: 1 }
     }
@@ -208,13 +258,63 @@ export function shown(p: DoorPrompt, dv: DoorView): Shown {
     case 'rename':
       return { lead: [], label: q('New name for your ship (5,000 credits)'), max: DOOR_LIMITS.shipName, text: true }
     case 'outfitQty':
-      return { lead: [], label: q(`How many ${ITEMS.find(i => i.id === p.item)?.name}s`, 1), max: 3, digits: true }
+      return { lead: [], label: q(`How many ${ITEMS.find(i => i.id === p.item)?.name}s`, 1), max: 4, digits: true }
     case 'bankTo':
       return { lead: [], label: q('Transfer to which trader'), max: LIMITS.handleMax, text: true }
     case 'bankAmt':
       return { lead: [], label: q(`How much to ${p.op === 'transfer' ? `send to ${p.to}` : p.op}`), max: 7, digits: true }
     case 'announce':
       return { lead: ['|10Your announcement goes in the daily log for 100 credits.'], label: q('Announce'), max: DOOR_LIMITS.announce, text: true }
+    case 'attackWho':
+      return { lead: p.targets.map((t, i) => `|14${String(i + 1).padStart(3)} ${t.label}`), label: q('Attack which target (0 to cancel)'), max: 2, digits: true }
+    case 'attackSure':
+      return { lead: [], label: q(`Attack ${bare(p.target.name)}? Are you POSITIVE? (Y/N)`, 'N', ' '), max: 1 }
+    case 'attackFighters':
+      return { lead: [`|10Target: ${p.target.label}`], label: q(`How many fighters (0 to ${num(p.max)})`), max: 6, digits: true }
+    case 'fighters':
+      return { lead: [], label: q('<Fighters> (D)eploy, (T)ake back, (Q)uit'), max: 1 }
+    case 'fDeployQty':
+      return { lead: [`|10You have |14${num(s?.ship.fighters ?? 0)}|10 fighters aboard.`], label: q(`How many fighters to leave here (0 to ${num(p.max)})`), max: 6, digits: true }
+    case 'fDeployMode':
+      return { lead: [], label: q('Mode: (D)efensive, (O)ffensive or (T)oll', 'D', ' '), max: 1 }
+    case 'fTakeQty':
+      return { lead: [`|10Your fighters here: |14${num(dv.here?.fighters?.count ?? 0)}|10.`], label: q(`How many fighters to take back (0 to ${num(p.max)})`), max: 6, digits: true }
+    case 'mines':
+      return { lead: [], label: q('<Mines> (C)ontact, (L)impet, (Q)uit'), max: 1 }
+    case 'mineOp':
+      return { lead: [], label: q(`<${p.mine === 'contact' ? 'Contact' : 'Limpet'}> (D)eploy, (T)ake back, (S)weep, (Q)uit`), max: 1 }
+    case 'mineQty':
+      return { lead: [], label: q(`How many ${MINE_NAME[p.mine]} to ${p.op === 'deploy' ? 'deploy' : 'take back'} (0 to ${num(p.max)})`), max: 5, digits: true }
+    case 'disrupt':
+      return { lead: [`|10You have |14${s?.ship.equipment.disruptors ?? 0}|10 Mine Disruptors. Warps: ${warpList(dv.here?.warps ?? [], undefined)}`], label: q('Fire into which sector (0 to cancel)'), max: 5, digits: true }
+    case 'beaconText':
+      return { lead: [`|10Leave a message of up to ${DOOR_LIMITS.beacon} characters. A new beacon replaces the old.`], label: q('Beacon'), max: DOOR_LIMITS.beacon, text: true }
+    case 'yield':
+      return { lead: [], label: q(dv.here?.fighters?.mode === 'toll' ? 'Hand over the toll in credits? (Y/N)' : 'Hand over your cargo? (Y/N)', 'N', ' '), max: 1 }
+    case 'portMenu':
+      return { lead: [], label: q(`<${bare(dv.here?.port?.name ?? 'Port')}> (T)rade, (R)ob, (S)teal, (Q)uit`), max: 1 }
+    case 'robAmt':
+      return { lead: [`|10A safe take for you is about |14${num(ROB.robExpMult * (s?.experience ?? 0))}|10 credits. Past that, you may be busted.`], label: q('How many credits do you try to take (0 to cancel)'), max: 9, digits: true }
+    case 'stealWhat':
+      return { lead: [], label: q('Steal which cargo? (C)ompute, (D)ata, (W)eights, (Q)uit'), max: 1 }
+    case 'stealQty':
+      return { lead: [`|10You have |14${p.max}|10 empty holds. A safe take is about |14${Math.floor((s?.experience ?? 0) / ROB.stealExpDiv)}|10.`], label: q(`How many holds of |11${COMMODITIES[p.commodity]}|13 do you try to steal (0 to cancel)`), max: 5, digits: true }
+    case 'rewardTarget':
+      return { lead: [`|10A reward raises your alignment by 1 per ${num(AWARDS.rewardAlignPer)} credits. The least is ${num(BACKROOM.rewardMin)}.`], label: q('Post a reward on which trader'), max: LIMITS.handleMax, text: true }
+    case 'rewardAmt':
+      return { lead: [], label: q(`How many credits on ${p.target}`), max: 9, digits: true }
+    case 'salTarget':
+      return { lead: [`|10A trace costs |14${num(LAST_LIGHT.traceCost)}|10 credits.`], label: q('Trace which trader'), max: LIMITS.handleMax, text: true }
+    case 'brPass':
+      return { lead: [], label: q('Password'), max: 40, text: true }
+    case 'back':
+      return { lead: [], label: q('<Back Room> (H)it, (C)ollect, (A)lias, (Q)uit'), max: 1 }
+    case 'brTarget':
+      return { lead: [`|10A hit costs you 1 alignment per ${num(AWARDS.hitAlignPer)} credits. The least is ${num(BACKROOM.hitMin)}.`], label: q('A hit on which trader'), max: LIMITS.handleMax, text: true }
+    case 'brAmt':
+      return { lead: [], label: q(`How many credits on ${p.target}`), max: 9, digits: true }
+    case 'brAlias':
+      return { lead: [`|10A new alias costs |14${num(BACKROOM.aliasBase + BACKROOM.aliasPerExp * (s?.experience ?? 0))}|10 credits.`], label: q('New alias'), max: DOOR_LIMITS.alias, text: true }
   }
 }
 
@@ -295,6 +395,7 @@ function pressGame(x: X, key: ClientKey): Step {
     if (sh.digits && /^[0-9]$/.test(key.key) && x.d.buf.length < sh.max) return { state: withDoor(x, { prompt: p, buf: x.d.buf + key.key }) }
     if (sh.text && isChar(key) && [...x.d.buf].length < sh.max) return { state: withDoor(x, { prompt: p, buf: x.d.buf + charOf(key) }) }
     // A letter at a number prompt: Q leaves the haggle or the trading post.
+    if (sh.digits && p.kind === 'class0' && lower(key) === 'l') return removeLimpet(x, `${sh.label}|15L`, p)
     if (sh.digits && lower(key) === 'q') {
       if (p.kind === 'tradeQty' || p.kind === 'offer') return send(x, { cmd: 'skip' }, `${sh.label}|15Q`)
       if (p.kind === 'class0') return send(x, { cmd: 'class0', holds: 0, fighters: 0, shields: 0 }, `${sh.label}|15Q`)
@@ -312,7 +413,10 @@ function cancel(x: X, p: DoorPrompt, sh: Shown): Step {
   if (p.kind === 'yardShip' || p.kind === 'yardName' || p.kind === 'rename') return say(x, lines, { kind: 'dock', venue: 'yard' })
   if (p.kind === 'outfitQty') return say(x, lines, { kind: 'dock', venue: 'outfit' })
   if (p.kind === 'bankAmt' || p.kind === 'bankTo') return say(x, lines, { kind: 'dock', venue: 'bank' })
-  if (p.kind === 'announce') return say(x, lines, { kind: 'dock', venue: 'tavern' })
+  if (p.kind === 'announce' || p.kind === 'brPass') return say(x, lines, { kind: 'dock', venue: 'tavern' })
+  if (p.kind === 'rewardTarget' || p.kind === 'rewardAmt') return say(x, lines, { kind: 'dock', venue: 'marshal' })
+  if (p.kind === 'salTarget') return say(x, lines, { kind: 'dock', venue: 'sal' })
+  if (p.kind === 'brTarget' || p.kind === 'brAmt' || p.kind === 'brAlias') return say(x, lines, { kind: 'back', pw: p.pw })
   if (p.kind === 'shipName') return { state: withDoor(x, { page: 'title', buf: '', prompt: CMD }) }
   return say(x, lines)
 }
@@ -390,6 +494,87 @@ function submit(x: X, p: DoorPrompt, sh: Shown, v: string): Step {
       if (!v) return say(x, answer(sh, ''), { kind: 'dock', venue: 'tavern' })
       return send(x, { cmd: 'announce', body: { text: v } }, undefined, { kind: 'dock', venue: 'tavern' }, answer(sh, v))
   }
+  return submitMore(x, p, sh, v, n)
+}
+
+/** An answer that is refused locally: shown in red, the question stays. */
+const again = (x: X, p: DoorPrompt, sh: Shown, v: string, why: string): Step =>
+  ({ state: withDoor(x, { prompt: p, buf: '', scratch: [...x.d.scratch, ...answer(sh, v), red(why)] }) })
+
+/** The Class 0 trading post's and the Drydock's limpet removal. */
+function removeLimpet(x: X, echo: string, next: DoorPrompt): Step {
+  if (!x.dv.snapshot?.limpet) return say(x, [echo, red('There is no limpet on your hull.')], next)
+  return send(x, { cmd: 'removeLimpet' }, echo, next)
+}
+
+/** The phase 2 prompts that take a number or text. */
+function submitMore(x: X, p: DoorPrompt, sh: Shown, v: string, n: number): Step {
+  const s = x.dv.snapshot
+  const marshal = { kind: 'dock', venue: 'marshal' } as const
+  switch (p.kind) {
+    case 'attackWho': {
+      if (!v || n === 0) return say(x, answer(sh, v))
+      const t = p.targets[n - 1]
+      if (!t) return again(x, p, sh, v, `Choose 1 to ${p.targets.length}, or 0 to cancel.`)
+      return say(x, answer(sh, v), t.marshal ? { kind: 'attackSure', target: t } : { kind: 'attackFighters', target: t, max: s ? attackMax(s) : 0 })
+    }
+    case 'attackFighters':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (n > p.max) return again(x, p, sh, v, `You can send at most ${num(p.max)}.`)
+      return send(x, { cmd: 'attack', target: p.target.name, fighters: n }, undefined, CMD, answer(sh, v))
+    case 'fDeployQty':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (n > p.max) return again(x, p, sh, v, `You can leave at most ${num(p.max)}.`)
+      return say(x, answer(sh, v), { kind: 'fDeployMode', count: n })
+    case 'fTakeQty':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (n > p.max) return again(x, p, sh, v, `You can take back at most ${num(p.max)}.`)
+      return send(x, { cmd: 'collect', body: { kind: 'fighters', count: n } }, undefined, CMD, answer(sh, v))
+    case 'mineQty': {
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (n > p.max) return again(x, p, sh, v, `At most ${num(p.max)}.`)
+      const cmd: DoorCmd = p.op === 'deploy' ? { cmd: 'deploy', body: { kind: p.mine, count: n, owner: 'personal' } } : { cmd: 'collect', body: { kind: p.mine, count: n } }
+      return send(x, cmd, undefined, CMD, answer(sh, v))
+    }
+    case 'disrupt':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (!x.dv.here?.warps.includes(n)) return again(x, p, sh, v, `Sector ${n} is not next door. The disruptor reaches only the warps from here.`)
+      return send(x, { cmd: 'disrupt', sector: n }, undefined, CMD, answer(sh, v))
+    case 'beaconText':
+      if (!v) return say(x, answer(sh, ''))
+      return send(x, { cmd: 'beacon', text: v }, undefined, CMD, answer(sh, v))
+    case 'robAmt':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      return send(x, { cmd: 'rob', credits: n }, undefined, CMD, answer(sh, v))
+    case 'stealQty':
+      if (!v || n === 0) return say(x, answer(sh, v))
+      if (n > p.max) return again(x, p, sh, v, `You have room for ${num(p.max)}.`)
+      return send(x, { cmd: 'steal', commodity: p.commodity, qty: n }, undefined, CMD, answer(sh, v))
+    case 'rewardTarget':
+      if (!v) return say(x, answer(sh, ''), marshal)
+      return say(x, answer(sh, v), { kind: 'rewardAmt', target: v })
+    case 'rewardAmt':
+      if (!v || n === 0) return say(x, answer(sh, v), marshal)
+      if (n < BACKROOM.rewardMin) return again(x, p, sh, v, `The Marshals post nothing under ${num(BACKROOM.rewardMin)} credits.`)
+      return send(x, { cmd: 'marshal', body: { op: 'reward', target: p.target, amount: n } }, undefined, marshal, answer(sh, v))
+    case 'salTarget':
+      if (!v) return say(x, answer(sh, ''), { kind: 'dock', venue: 'sal' })
+      return send(x, { cmd: 'sal', body: { op: 'trace', target: v } }, undefined, { kind: 'dock', venue: 'sal' }, answer(sh, v))
+    case 'brPass':
+      // The password never lands in the transcript.
+      if (!v) return say(x, answer(sh, ''), { kind: 'dock', venue: 'tavern' })
+      return say(x, [`${sh.label}|15${'*'.repeat([...v].length)}`, '|10<The Back Room>'], { kind: 'back', pw: v })
+    case 'brTarget':
+      if (!v) return say(x, answer(sh, ''), { kind: 'back', pw: p.pw })
+      return say(x, answer(sh, v), { kind: 'brAmt', pw: p.pw, target: v })
+    case 'brAmt':
+      if (!v || n === 0) return say(x, answer(sh, v), { kind: 'back', pw: p.pw })
+      if (n < BACKROOM.hitMin) return again(x, p, sh, v, `Nobody takes a hit under ${num(BACKROOM.hitMin)} credits.`)
+      return send(x, { cmd: 'backroom', body: { password: p.pw, op: 'hit', target: p.target, amount: n } }, undefined, { kind: 'back', pw: p.pw }, answer(sh, v))
+    case 'brAlias':
+      if (!v) return say(x, answer(sh, ''), { kind: 'back', pw: p.pw })
+      return send(x, { cmd: 'backroom', body: { password: p.pw, op: 'alias', alias: v } }, undefined, { kind: 'back', pw: p.pw }, answer(sh, v))
+  }
   return { state: withDoor(x, { prompt: p }) }
 }
 
@@ -409,15 +594,41 @@ function pressKey(x: X, p: DoorPrompt, sh: Shown, key: ClientKey): Step {
           return say(x, [echo, '|10<Move>', `|10Warps to Sector(s) |14:  ${warpList(dv.here?.warps ?? [], undefined)}`], { kind: 'move' })
         case 'd':
           return send(x, { cmd: 'local', key: 'D' }, echo)
-        case 'p':
-          if (!dv.here?.port) return say(x, [echo, red('There is no port in this sector.')])
+        case 'p': {
+          const port = dv.here?.port
+          if (!port) return say(x, [echo, red('There is no port in this sector.')])
+          // Outlaws get the crime menu at an ordinary port.
+          if (s.alignment <= ROB.maxAlign && port.class >= 1 && port.class <= 8 && !port.destroyed) return say(x, [echo], { kind: 'portMenu' })
           return send(x, { cmd: 'dock' }, echo)
+        }
         case 's': {
           const scanner = s.ship.equipment.scanner
           if (scanner === 'none') return say(x, [echo, red('You have no long range scanner. The Outfitter at the Drydock sells them.')])
           if (scanner === 'density') return send(x, { cmd: 'scan', kind: 'density' }, echo)
           return say(x, [echo], { kind: 'scan' })
         }
+        case 'a': {
+          if (s.ship.fighters < 1) return say(x, [echo, red('You have no fighters to send. Trading posts sell them.')])
+          const targets = attackTargets(dv.here, s.name)
+          if (!targets.length) return say(x, [echo, red('There is nobody here to attack.')])
+          if (targets.length > 1) return say(x, [echo, '|10<Attack>'], { kind: 'attackWho', targets })
+          const t = targets[0]
+          return say(x, [echo, '|10<Attack>'], t.marshal ? { kind: 'attackSure', target: t } : { kind: 'attackFighters', target: t, max: attackMax(s) })
+        }
+        case 'f':
+          return say(x, [echo, '|10<Fighters>'], { kind: 'fighters' })
+        case 'h':
+          return say(x, [echo, '|10<Mines>'], { kind: 'mines' })
+        case 'b':
+          if (s.ship.equipment.beacons < 1) return say(x, [echo, red('You have no Marker Beacons. The Outfitter sells them.')])
+          if (dv.here?.region === 'concord') return say(x, [echo, red('Concord Space allows no beacons.')])
+          return say(x, [echo], { kind: 'beaconText' })
+        case 'r':
+          if (!s.blocked) return say(x, [echo, red('There is nothing to retreat from.')])
+          return send(x, { cmd: 'retreat' }, echo)
+        case 'y':
+          if (!s.blocked) return say(x, [echo, red('Nobody is holding you. There is nothing to yield to.')])
+          return say(x, [echo], { kind: 'yield' })
         case 'c':
           return say(x, [echo, '|10<Computer activated>'], { kind: 'computer' })
         case 'i':
@@ -446,11 +657,14 @@ function pressKey(x: X, p: DoorPrompt, sh: Shown, key: ClientKey): Step {
       if (next[k]) return say(x, [echo], next[k])
       const locals: Record<string, 'CK' | 'CX' | 'CL' | 'CG' | 'CE' | 'C?'> = { k: 'CK', x: 'CX', l: 'CL', g: 'CG', e: 'CE', '?': 'C?' }
       if (locals[k]) return send(x, { cmd: 'local', key: locals[k] }, echo, stay)
+      // The limpet scan is free but needs no scanner, so the computer carries it too.
+      if (k === 't') return send(x, { cmd: 'scan', kind: 'limpet' }, echo, stay)
       if (k === 'q' || key.key === 'escape') return say(x, [echo, '|10<Computer deactivated>'])
       return { state: withDoor(x, { prompt: stay }) }
     }
     case 'scan':
       if (k === 'h') return send(x, { cmd: 'scan', kind: 'holo' }, echo)
+      if (k === 'l') return send(x, { cmd: 'scan', kind: 'limpet' }, echo)
       if (k === 'd' || isEnter(key)) return send(x, { cmd: 'scan', kind: 'density' }, `${sh.label}|15D`)
       if (k === 'q' || key.key === 'escape') return say(x, [echo])
       return { state: withDoor(x, { prompt: p }) }
@@ -463,6 +677,91 @@ function pressKey(x: X, p: DoorPrompt, sh: Shown, key: ClientKey): Step {
     }
     case 'dock':
       return pressDrydock(x, p.venue, sh, k, echo, key)
+  }
+  return pressMore(x, p, sh, key, echo)
+}
+
+/** The phase 2 single-key prompts. */
+function pressMore(x: X, p: DoorPrompt, sh: Shown, key: ClientKey, echo: string): Step {
+  const k = lower(key)
+  const dv = x.dv
+  const s = dv.snapshot
+  const back = k === 'q' || key.key === 'escape'
+  const stay = (): Step => ({ state: withDoor(x, { prompt: p }) })
+  const no = (msg: string, next: DoorPrompt = CMD) => say(x, [echo, red(msg)], next)
+  const concord = dv.here?.region === 'concord'
+  switch (p.kind) {
+    case 'attackSure':
+      if (k === 'y') return say(x, [`${sh.label}|15Y`], { kind: 'attackFighters', target: p.target, max: s ? attackMax(s) : 0 })
+      return say(x, [`${sh.label}|15N`])
+    case 'fighters': {
+      if (!s) return stay()
+      if (k === 'd') {
+        if (s.ship.fighters < 1) return no('You have no fighters aboard. Trading posts sell them.')
+        if (concord) return no('Concord Space allows no fighters.')
+        return say(x, [echo], { kind: 'fDeployQty', max: s.ship.fighters })
+      }
+      if (k === 't') {
+        const f = dv.here?.fighters
+        if (!f?.isYours) return no('You have no fighters in this sector.')
+        const room = (SHIPS[s.ship.type]?.maxFighters ?? 0) - s.ship.fighters
+        if (room < 1) return no('Your ship cannot carry any more fighters.')
+        return say(x, [echo], { kind: 'fTakeQty', max: Math.min(f.count, room) })
+      }
+      return back ? say(x, [echo]) : stay()
+    }
+    case 'fDeployMode': {
+      const modes: Record<string, FighterMode> = { d: 'defensive', o: 'offensive', t: 'toll' }
+      const mode = isEnter(key) ? 'defensive' : modes[k]
+      if (mode) return send(x, { cmd: 'deploy', body: { kind: 'fighters', count: p.count, owner: 'personal', mode } }, isEnter(key) ? `${sh.label}|15D` : echo)
+      return back ? say(x, [echo]) : stay()
+    }
+    case 'mines':
+      if (k === 'c' || k === 'l') return say(x, [echo], { kind: 'mineOp', mine: k === 'c' ? 'contact' : 'limpet' })
+      return back ? say(x, [echo]) : stay()
+    case 'mineOp': {
+      if (!s) return stay()
+      const name = MINE_NAME[p.mine]
+      if (k === 'd') {
+        if (aboard(s, p.mine) < 1) return no(`You have no ${name} aboard. The Outfitter sells them.`)
+        if (concord) return no('Concord Space allows no mines.')
+        return say(x, [echo], { kind: 'mineQty', mine: p.mine, op: 'deploy', max: aboard(s, p.mine) })
+      }
+      if (k === 't') {
+        const here = dv.here?.mines.find(m => m.kind === p.mine && m.isYours)
+        if (!here) return no(`You have no ${name} in this sector.`)
+        const room = (SHIPS[s.ship.type]?.mines ?? 0) - aboard(s, p.mine)
+        if (room < 1) return no(`Your ship cannot carry any more ${name}.`)
+        return say(x, [echo], { kind: 'mineQty', mine: p.mine, op: 'take', max: Math.min(here.count, room) })
+      }
+      if (k === 's') {
+        if (s.ship.equipment.disruptors < 1) return no('You have no Mine Disruptors. The Outfitter sells them.')
+        return say(x, [echo], { kind: 'disrupt' })
+      }
+      return back ? say(x, [echo]) : stay()
+    }
+    case 'yield':
+      if (k === 'y') return send(x, { cmd: 'surrender' }, `${sh.label}|15Y`)
+      return say(x, [`${sh.label}|15N`])
+    case 'portMenu':
+      if (k === 't') return send(x, { cmd: 'dock' }, echo)
+      if (k === 'r') return say(x, [echo], { kind: 'robAmt' })
+      if (k === 's') {
+        if (s && holdsFree(s) < 1) return no('Your holds are full. There is no room for stolen cargo.')
+        return say(x, [echo], { kind: 'stealWhat' })
+      }
+      return back ? say(x, [echo]) : stay()
+    case 'stealWhat': {
+      const pick: Record<string, Commodity> = { c: 0, d: 1, w: 2 }
+      if (k in pick && s) return say(x, [echo], { kind: 'stealQty', commodity: pick[k], max: holdsFree(s) })
+      return back ? say(x, [echo]) : stay()
+    }
+    case 'back':
+      if (k === 'h') return say(x, [echo], { kind: 'brTarget', pw: p.pw })
+      if (k === 'c') return send(x, { cmd: 'backroom', body: { password: p.pw, op: 'collect' } }, echo, p)
+      if (k === 'a') return say(x, [echo], { kind: 'brAlias', pw: p.pw })
+      if (k === '?') return say(x, [echo, ...menuHelp('backroom')], p)
+      return back ? say(x, [echo, '|08You slip out past the bouncer.'], { kind: 'dock', venue: 'tavern' }) : stay()
   }
   return { state: x.s }
 }
@@ -477,6 +776,11 @@ function pressDrydock(x: X, venue: Venue, sh: Shown, k: string, echo: string, ke
       if (k === 'o' && s) return say(x, [echo, ...outfitterLines(s)], at('outfit'))
       if (k === 'b') return say(x, [echo, '|10<Exchange Bank>'], at('bank'))
       if (k === 't') return say(x, [echo, '|10<The Last Light> |08Smoke, low music, and a board of announcements by the door.'], at('tavern'))
+      if (k === 'm') {
+        if (s && s.alignment < AWARDS.marshalOfficeMinAlign) return say(x, [echo, red('The Marshals want nothing to do with you.')], at('top'))
+        return say(x, [echo, '|10<Marshal\'s Office>'], at('marshal'))
+      }
+      if (k === 'l') return removeLimpet(x, echo, at('top'))
       if (k === '?') return say(x, [echo, ...DRYDOCK_HELP], at('top'))
       if (back) return send(x, { cmd: 'clear' }, echo, CMD, ['|08You cast off from the Drydock.', ''])
       return { state: withDoor(x, { prompt: at('top') }) }
@@ -487,7 +791,7 @@ function pressDrydock(x: X, venue: Venue, sh: Shown, k: string, echo: string, ke
       if (back) return say(x, [echo], at('top'))
       return { state: withDoor(x, { prompt: at('yard') }) }
     case 'outfit': {
-      const item = ITEMS.find(i => i.phase === 1 && i.key.toLowerCase() === k)
+      const item = ITEMS.find(i => i.phase <= 2 && i.key.toLowerCase() === k)
       if (item) return say(x, [echo], { kind: 'outfitQty', item: item.id })
       if (back) return say(x, [echo], at('top'))
       return { state: withDoor(x, { prompt: at('outfit') }) }
@@ -500,8 +804,34 @@ function pressDrydock(x: X, venue: Venue, sh: Shown, k: string, echo: string, ke
       return { state: withDoor(x, { prompt: at('bank') }) }
     case 'tavern':
       if (k === 'a') return say(x, [echo], { kind: 'announce' })
+      if (k === 's') return say(x, [echo, ...OLD_SAL.greeting], at('sal'))
+      if (k === 'b') {
+        if (s && s.alignment > AWARDS.backRoomMaxAlign) return say(x, [echo, red('The bouncer looks you over, then shakes his head. Not your kind of room.')], at('tavern'))
+        return say(x, [echo, '|08A heavy door at the back, with a slot at eye height.'], { kind: 'brPass' })
+      }
+      if (k === '?') return say(x, [echo, ...menuHelp('tavern')], at('tavern'))
       if (back) return say(x, [echo], at('top'))
       return { state: withDoor(x, { prompt: at('tavern') }) }
+    case 'marshal':
+      if (k === 'a') {
+        if (s?.commissioned) return say(x, [echo, red('You already hold a commission.')], at('marshal'))
+        if (s && s.alignment < AWARDS.commissionApply) return say(x, [echo, red(`A commission needs an alignment of ${AWARDS.commissionApply} or better.`)], at('marshal'))
+        return send(x, { cmd: 'marshal', body: { op: 'commission' } }, echo, at('marshal'))
+      }
+      if (k === 'p') return say(x, [echo], { kind: 'rewardTarget' })
+      if (k === 'w') return send(x, { cmd: 'marshal', body: { op: 'wanted' } }, echo, at('marshal'))
+      if (k === 'c') return send(x, { cmd: 'marshal', body: { op: 'claim' } }, echo, at('marshal'))
+      if (k === '?') return say(x, [echo, ...menuHelp('marshal')], at('marshal'))
+      if (back) return say(x, [echo], at('top'))
+      return { state: withDoor(x, { prompt: at('marshal') }) }
+    case 'sal':
+      if (k === 't') return say(x, [echo], { kind: 'salTarget' })
+      if (k === 'p') return send(x, { cmd: 'sal', body: { op: 'password' } }, echo, at('sal'))
+      if (k === 'f') return send(x, { cmd: 'sal', body: { op: 'fortune' } }, echo, at('sal'))
+      if (k === 's') return send(x, { cmd: 'sal', body: { op: 'swear' } }, echo, at('sal'))
+      if (k === '?') return say(x, [echo, ...menuHelp('sal')], at('sal'))
+      if (back) return say(x, [echo], at('tavern'))
+      return { state: withDoor(x, { prompt: at('sal') }) }
   }
 }
 

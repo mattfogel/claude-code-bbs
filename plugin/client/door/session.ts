@@ -8,8 +8,8 @@ import type { DoorAsk, DoorBoard, DoorCmd, DoorKnown, DoorLocalKey, DoorView } f
 import { DEFAULT_CONFIG, SHIPS, type Commodity, type ItemId } from '../../shared/door/data'
 import { plotCourse } from '../../shared/door/nav'
 import type {
-  AnnounceRequest, BankRequest, DoorEvent, DoorMap, DoorNews, DoorReply, DoorStateReply, KnownDelta, PlayerSnapshot, PortReport, SectorView,
-  ShipwrightRequest, TradeStep,
+  AnnounceRequest, AttackRequest, BackroomRequest, BankRequest, BeaconRequest, Class0Request, CollectRequest, DeployRequest, DisruptRequest, DoorEvent, DoorMap, DoorNews, DoorReply, DoorStateReply, FighterMode, KnownDelta, MarshalRequest, MineKind, PlayerSnapshot, PortReport, RobRequest, SalRequest,
+  ScanRequest, SectorView, ShipwrightRequest, StealRequest, TradeStep,
 } from '../../shared/door/protocol'
 import {
   courseLines, eventLines, logLines, num, portReportLines, quickStatsLines, rankTableLines, shipCatalogLines, shipInfoLines, sectorLines,
@@ -23,8 +23,15 @@ type Mirrors = [
   Same<T.PlayerSnapshot, PlayerSnapshot>, Same<T.SectorView, SectorView>, Same<T.PortReport, PortReport>, Same<T.TradeStep, TradeStep>,
   Same<T.DoorMap, DoorMap>, Same<T.DoorNews, DoorNews>, Same<T.ShipwrightRequest, ShipwrightRequest>, Same<T.BankRequest, BankRequest>,
   Same<T.AnnounceRequest, AnnounceRequest>, Same<T.Commodity, Commodity>, Same<T.ItemId, ItemId>,
+  Same<T.AttackRequest, AttackRequest>, Same<T.RobRequest, RobRequest>, Same<T.StealRequest, StealRequest>, Same<T.BeaconRequest, BeaconRequest>,
+  Same<T.DisruptRequest, DisruptRequest>, Same<T.ScanRequest, ScanRequest>, Same<T.Class0Request, Class0Request>, Same<T.DeployRequest, DeployRequest>,
+  Same<T.CollectRequest, CollectRequest>, Same<T.MarshalRequest, MarshalRequest>, Same<T.BackroomRequest, BackroomRequest>, Same<T.SalRequest, SalRequest>,
+  Same<T.FighterMode, FighterMode>, Same<T.MineKind, MineKind>,
 ]
-export const MIRRORS_MATCH: Mirrors = [true, true, true, true, true, true, true, true, true, true, true]
+export const MIRRORS_MATCH: Mirrors = [
+  true, true, true, true, true, true, true, true, true, true, true,
+  true, true, true, true, true, true, true, true, true, true, true, true, true, true,
+]
 
 export const TRANSCRIPT_MAX = 300
 /** Today's log lines kept for the title's Log page. */
@@ -122,6 +129,33 @@ export function plan(ctx: DoorCtx, c: DoorCmd): Plan {
       const what = c.sector === 0 ? 'Avoid list cleared.' : s.avoids.includes(c.sector) ? `Sector ${c.sector} is no longer avoided.` : `Sector ${c.sector} will be avoided.`
       return { lines: [`|10${what}`], request: post('avoids', { set }) }
     }
+    case 'attack':
+      return { lines: [], ask: null, request: post('attack', { target: c.target, fighters: c.fighters }) }
+    case 'retreat':
+      return { lines: [], ask: null, request: post('retreat') }
+    case 'surrender':
+      return { lines: [], ask: null, request: post('surrender') }
+    case 'deploy':
+      return { lines: [], ask: null, request: post('deploy', c.body) }
+    case 'collect':
+      return { lines: [], ask: null, request: post('collect', c.body) }
+    case 'rob':
+      return { lines: [], ask: null, request: post('rob', { credits: c.credits }) }
+    case 'steal':
+      return { lines: [], ask: null, request: post('steal', { commodity: c.commodity, qty: c.qty }) }
+    case 'beacon':
+      return { lines: [], ask: null, request: post('beacon', { text: c.text }) }
+    case 'disrupt':
+      return { lines: [], ask: null, request: post('disrupt', { sector: c.sector }) }
+    // The Drydock's and the trading post's menus stay open.
+    case 'marshal':
+      return { lines: [], request: post('marshal', c.body) }
+    case 'backroom':
+      return { lines: [], request: post('backroom', c.body) }
+    case 'sal':
+      return { lines: [], request: post('sal', c.body) }
+    case 'removeLimpet':
+      return { lines: [], request: post('class0', { removeLimpet: true }) }
   }
 }
 
@@ -133,6 +167,7 @@ function plot(ctx: DoorCtx, to: number, engage: boolean): Plan {
   if (!map) return { lines: [red('The navigation computer has no star map. Try again in a moment.')] }
   if (!Number.isInteger(to) || to < 1 || to > map.sectors) return { lines: [red(`There is no sector ${to}. Sectors run 1 to ${map.sectors}.`)] }
   if (to === s.sector) return { lines: [red('You are already in that sector.')] }
+  if (s.blocked) return { lines: [red('Hostile fighters hold this sector. Attack them, retreat or yield.')], ask: null }
   const tpw = SHIPS[s.ship.type]?.turnsPerWarp ?? 1
   if (engage && map.warps[s.sector]?.includes(to)) {
     return { lines: [], ask: null, request: post('move', { path: [to], mode: 'alert' }) }
@@ -216,6 +251,8 @@ export function tradeAsk(reply: Pick<DoorReply, 'pending' | 'events'>, known: Do
   return ask
 }
 
+const dead = (events: readonly DoorEvent[]) => events.some(e => e.kind === 'dead')
+
 function format(events: DoorEvent[], ctx: { snapshot?: PlayerSnapshot; known: DoorKnown; steps?: readonly TradeStep[]; here?: SectorView }): string[] {
   return events.flatMap(e => eventLines(e, { snapshot: ctx.snapshot, steps: ctx.steps, explored: explorer(ctx.known), portName: ctx.here?.port?.name }))
 }
@@ -265,7 +302,20 @@ export function applyReply(ctx: DoorCtx, c: DoorCmd, reply: DoorReply | DoorStat
       }
     case 'move':
     case 'plot':
-      return { lines: [...fmt(r.events), ...sectorLines(r.here, explorer(known)), ''], ask: null, known }
+      return { lines: [...fmt(r.events), ...(dead(r.events) ? [] : [...sectorLines(r.here, explorer(known)), ''])], ask: null, known }
+    case 'attack':
+    case 'retreat':
+    case 'surrender':
+    case 'deploy':
+    case 'collect':
+    case 'rob':
+    case 'steal':
+    case 'beacon':
+    case 'disrupt': {
+      // A pod or a retreat leaves you somewhere else: show where.
+      const moved = r.events.some(e => e.kind === 'podded' || e.kind === 'retreat')
+      return { lines: [...fmt(r.events), ...(moved && !dead(r.events) ? [...sectorLines(r.here, explorer(known)), ''] : [])], ask: null, known }
+    }
     case 'dock': {
       const ev = r.events
       let ask: DoorAsk | null = null

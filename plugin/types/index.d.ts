@@ -158,6 +158,13 @@ export type TradeStep = { commodity: Commodity; side: 'sell' | 'buy'; max: numbe
 export type ShipwrightRequest = { op: 'buy'; ship: number; name: string } | { op: 'sell'; shipId: number } | { op: 'rename'; name: string }
 export type BankRequest = { op: 'deposit' | 'withdraw'; amount: number } | { op: 'transfer'; amount: number; to: string }
 export type AnnounceRequest = { text: string }
+export type AttackRequest = { target: string; fighters: number }
+export type RobRequest = { credits: number }
+export type StealRequest = { commodity: Commodity; qty: number }
+export type BeaconRequest = { text: string }
+export type DisruptRequest = { sector: number }
+export type ScanRequest = { kind: 'density' | 'holo' | 'limpet' }
+export type Class0Request = { holds?: number; fighters?: number; shields?: number; removeLimpet?: boolean }
 export type DeployRequest =
   | { kind: 'fighters'; count: number; owner: 'personal' | 'corp'; mode: FighterMode }
   | { kind: MineKind; count: number; owner: 'personal' | 'corp' }

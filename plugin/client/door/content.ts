@@ -19,6 +19,8 @@ export function titleArt(width: number): string[] {
 export const HELP: string[] = [...(MENU_HELP.command ?? [])]
 export const COMPUTER_HELP: string[] = [...(MENU_HELP.computer ?? [])]
 export const DRYDOCK_HELP: string[] = [...(MENU_HELP.drydock ?? [])]
+/** Any other menu's help, by its name in text.ts's HELP. */
+export const menuHelp = (menu: string): string[] => [...(MENU_HELP[menu] ?? [])]
 
 /** The title's Instructions, as pages: the intro, then the manual. */
 export const INSTRUCTION_PAGES: string[][] = [[...INTRO], ...PAGES.map(p => [...p])]

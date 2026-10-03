@@ -22,7 +22,9 @@ type Step = { commodity: 0 | 1 | 2; side: 'buy' | 'sell'; max: number; defaultQt
 function fakeDoor(on: On) {
   const door = {
     requests: [] as { url: string; method: string; body: unknown }[],
-    player: undefined as undefined | { sector: number; turns: number; credits: number; holds: number; cargo: [number, number, number]; shipName: string },
+    player: undefined as undefined | { sector: number; turns: number; credits: number; holds: number; cargo: [number, number, number]; shipName: string; fighters: number; alignment: number; limpet: boolean; blocked: boolean },
+    /** Fighters the player left in sector 2. */
+    left: undefined as undefined | { count: number; mode: string },
     explored: new Set<number>(),
     trade: undefined as undefined | { todo: (0 | 2)[]; active?: { c: 0 | 2; qty: number; offer: number } },
     closed: false,
@@ -30,9 +32,11 @@ function fakeDoor(on: On) {
   const json = (status: number, data: unknown, headers: Record<string, string> = {}) => ({ value: { status, ok: status < 300, headers, text: JSON.stringify(data) } })
   const fail = (status: number, code: string, message: string) => json(status, { error: { code, message } })
   const sector = (id: number) => ({
-    id, region: id <= 3 ? 'concord' : 'uncharted', planets: id === 1 ? [{ id: 1, name: 'Terra', class: 'T' }] : [], traders: [], ships: [], navhaz: 0, mines: [],
+    id, region: id === 1 ? 'concord' : 'uncharted', planets: id === 1 ? [{ id: 1, name: 'Terra', class: 'T' }] : [],
+    traders: id === 2 ? [{ name: 'Razor', ship: 'Vex', shipType: 8, fighters: 120 }] : [], ships: [], navhaz: 0, mines: [],
     hallucinations: [], marshals: [], warps: WARPS[id],
-    ...(id === 1 ? { port: { name: 'Haven', class: 0 } } : id === 7 ? { port: { name: 'Kestrel Yard', class: 5 } } : {}),
+    ...(id === 2 && door.left ? { fighters: { count: door.left.count, owner: 'mattf', isYours: true, isCorp: false, mode: door.left.mode } } : {}),
+    ...(id === 1 ? { port: { name: 'Haven', class: 0 } } : id === 7 ? { port: { name: 'Kestrel Yard', class: 5 } } : id === 8 ? { port: { name: 'Drydock Anchorage', class: 9 } } : {}),
   })
   const report = () => ({ sector: 7, name: 'Kestrel Yard', class: 5, seenAt: ISO, items: [{ status: 'selling', trading: 1200, pct: 100 }, { status: 'buying', trading: 900, pct: 80 }, { status: 'selling', trading: 600, pct: 90 }] })
   const free = () => door.player!.holds - door.player!.cargo.reduce((a, b) => a + b, 0)
@@ -48,9 +52,9 @@ function fakeDoor(on: On) {
   const snapshot = () => {
     const p = door.player!
     return {
-      v: 1, season: 's1', id: 1, name: 'mattf', sector: p.sector, prevSector: 1, turns: p.turns, turnsMax: 250, credits: p.credits, bank: 0, experience: 0, alignment: 0,
-      timesBlownUp: 0, commissioned: false, avoids: [], lastSeenLog: 0, requestsToday: door.requests.length,
-      ship: { type: 1, name: p.shipName, holds: p.holds, cargo: p.cargo, colonists: 0, fighters: 30, shields: 0,
+      v: 1, season: 's1', id: 1, name: 'mattf', sector: p.sector, prevSector: 1, turns: p.turns, turnsMax: 250, credits: p.credits, bank: 0, experience: 0, alignment: p.alignment,
+      timesBlownUp: 0, commissioned: false, avoids: [], lastSeenLog: 0, requestsToday: door.requests.length, limpet: p.limpet, blocked: p.blocked,
+      ship: { type: 1, name: p.shipName, holds: p.holds, cargo: p.cargo, colonists: 0, fighters: p.fighters, shields: 0,
         equipment: { contactMines: 0, limpets: 0, beacons: 0, seeds: 0, crackers: 0, deadman: 0, cloaks: 0, probes: 0, disruptors: 0, photons: 0, scanner: 'none', planetScanner: false, lens: false, jump: 0 } },
     }
   }
@@ -85,7 +89,7 @@ function fakeDoor(on: On) {
     }
     if (path === '/v1/door/create') {
       if (door.player) return fail(409, 'taken', 'You already fly in this Epoch.')
-      door.player = { sector: 1, turns: 250, credits: 5000, holds: 20, cargo: [0, 0, 0], shipName: body.shipName }
+      door.player = { sector: 1, turns: 250, credits: 5000, holds: 20, cargo: [0, 0, 0], shipName: body.shipName, fighters: 30, alignment: 0, limpet: false, blocked: false }
       door.explored.add(1)
       return reply([], { explored: [1], ports: [] })
     }
@@ -113,6 +117,7 @@ function fakeDoor(on: On) {
       }
       case '/v1/door/dock':
         p.turns--
+        if (p.sector === 8) return reply([{ kind: 'text', text: 'You dock.' }])
         if (p.sector === 1) return reply([{ kind: 'class0', holdPrice: 200 + 20 * p.holds, fighterPrice: 200, shieldPrice: 150 }])
         if (p.sector !== 7) return fail(400, 'invalid', 'There is no port in this sector.')
         door.trade = { todo: [0, 2] }
@@ -139,11 +144,44 @@ function fakeDoor(on: On) {
       }
       case '/v1/door/class0': {
         if (p.sector !== 1) return fail(400, 'invalid', 'Holds, fighters and shields are sold at Haven.')
+        if (body.removeLimpet) {
+          p.limpet = false
+          p.credits -= 5000
+          return reply([{ kind: 'bought', what: 'limpet removal', qty: 1, cost: 5000 }])
+        }
         const cost = body.holds * (200 + 20 * p.holds) + 20 * ((body.holds * (body.holds - 1)) / 2)
         p.holds += body.holds
         p.credits -= cost
         return reply([{ kind: 'bought', what: 'holds', qty: body.holds, cost }])
       }
+    }
+    // Phase 2: each answers with the one event the screen should show.
+    switch (path) {
+      case '/v1/door/attack':
+        p.blocked = true
+        return reply([{ kind: 'attack', target: body.target, sent: body.fighters, lost: 1, killed: 3, shieldsLost: 0, destroyed: false, captured: false, fled: false }])
+      case '/v1/door/deploy':
+        door.left = { count: body.count, mode: body.mode }
+        p.fighters -= body.count
+        return reply([{ kind: 'deployed', what: 'fighters', count: body.count, mode: body.mode }])
+      case '/v1/door/collect':
+        p.fighters += body.count
+        door.left = door.left && door.left.count > body.count ? { ...door.left, count: door.left.count - body.count } : undefined
+        return reply([{ kind: 'collected', what: 'fighters', count: body.count }])
+      case '/v1/door/retreat':
+        p.blocked = false
+        p.sector = 1
+        return reply([{ kind: 'retreat', to: 1 }])
+      case '/v1/door/rob':
+        return reply([{ kind: 'robbed', credits: body.credits }])
+      case '/v1/door/steal':
+        return reply([{ kind: 'stolen', commodity: body.commodity, qty: body.qty }])
+      case '/v1/door/marshal':
+        return reply(body.op === 'wanted' ? [{ kind: 'wanted', rows: [{ name: 'Razor', reward: 9000 }] }] : [{ kind: 'text', text: 'The Marshal stamps something.' }])
+      case '/v1/door/sal':
+        return reply([{ kind: 'text', text: 'Sal says nothing useful.' }])
+      case '/v1/door/backroom':
+        return reply([{ kind: 'text', text: 'The Back Room hums.' }])
     }
     return fail(404, 'not_found', path)
   })
@@ -285,6 +323,89 @@ describe('HYPERPLANE', () => {
     for (let i = 0; i < 5 && !(await screen(ui)).includes('Razor'); i++) await ui.advance(20)
     expect(await screen(ui)).toContain('Razor')
     expect(doorCalls(d)).toEqual([])
+    await ui.unmount()
+  })
+
+  test('fights, deploys, robs and plays the back rooms, one request each', async ($, on) => {
+    engine(on)
+    const d = fakeDoor(on)
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    await $.command.run({ command: 'bbs', args: '', origin: { kind: 'composer' } } as never)
+    const ui = (await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })) as unknown as Ui
+    await press(ui, ['l', 'x', 'd', '1', 'e', ...'Nightjar', 'return'])
+    const last = () => doorCalls(d).at(-1)
+
+    // Next door: one trader. Fighters deployed in Toll mode, then some taken back.
+    await press(ui, ['2', 'return'])
+    expect(await screen(ui)).toContain('Traders : Razor, w/ 120 ftrs,')
+    await press(ui, ['f', 'd', ...'10', 'return', 't'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/deploy`, body: { kind: 'fighters', count: 10, owner: 'personal', mode: 'toll' } })
+    expect(await screen(ui)).toContain('10 fighters deployed (toll).')
+    await press(ui, ['f', 't', '3', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/collect`, body: { kind: 'fighters', count: 3 } })
+    expect(await screen(ui)).toContain('You take back 3 fighters.')
+
+    // Attack: one target, so straight to the fighters; the reply leaves us held, so only A, R and Y work.
+    await press(ui, ['a', ...'5', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/attack`, body: { target: 'Razor', fighters: 5 } })
+    expect(await screen(ui)).toContain('You send 5 fighters at Razor: 3 destroyed')
+    expect(await screen(ui)).toContain('Hostile fighters hold this sector: (A)ttack, (R)etreat or (Y)ield.')
+    let before = doorCalls(d).length
+    await press(ui, ['1', 'return'])
+    expect(doorCalls(d).length).toBe(before)
+    expect(await screen(ui)).toContain('Attack them, retreat or yield')
+    d.player!.limpet = true
+    d.player!.alignment = -200
+    await press(ui, ['r'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/retreat`, body: {} })
+    expect(await screen(ui)).toContain('You back away and run for sector 1.')
+    expect(await screen(ui)).not.toContain('Hostile fighters hold this sector: (A)ttack')
+    before = doorCalls(d).length
+    await press(ui, ['r', 'y'])
+    expect(doorCalls(d).length).toBe(before)
+    expect(await screen(ui)).toContain('nothing to yield to')
+
+    // A limpet comes off at Haven's trading post.
+    await press(ui, ['p'])
+    expect(await screen(ui)).toContain('A limpet is clamped to your hull.')
+    await press(ui, ['l'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/class0`, body: { removeLimpet: true } })
+    expect(await screen(ui)).toContain('The limpet is pried off your hull for 5,000 credits.')
+    await press(ui, ['q'])
+
+    // An outlaw at an ordinary port: the crime menu, then a rob and a steal.
+    await press(ui, ['7', 'return', 'return', 'p'])
+    expect(await screen(ui)).toContain('<Kestrel Yard> (T)rade, (R)ob, (S)teal, (Q)uit')
+    await press(ui, ['r', ...'700', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/rob`, body: { credits: 700 } })
+    await press(ui, ['p', 's', 'd', '4', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/steal`, body: { commodity: 1, qty: 4 } })
+
+    // The Drydock as an honest pilot: the Marshal's Office takes you, the Back Room does not.
+    d.player!.alignment = 600
+    await press(ui, ['8', 'return', 'return', 'p'])
+    expect(await screen(ui)).toContain('<Drydock> Where to?')
+    await press(ui, ['m', 'w'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/marshal`, body: { op: 'wanted' } })
+    expect(await screen(ui)).toContain('Razor')
+    await press(ui, ['p', ...'Razor', 'return', ...'5000', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/marshal`, body: { op: 'reward', target: 'Razor', amount: 5000 } })
+    await press(ui, ['q', 't', 's', 'f'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/sal`, body: { op: 'fortune' } })
+    before = doorCalls(d).length
+    await press(ui, ['q', 'b'])
+    expect(doorCalls(d).length).toBe(before)
+    expect(await screen(ui)).toContain('The bouncer looks you over')
+
+    // Down on his luck, he is let in; every Back Room request carries the password.
+    d.player!.alignment = -300
+    await press(ui, ['s', 'f', 'q', 'b', ...'quiet kernel', 'return'])
+    expect(doorCalls(d).length).toBe(before + 1)
+    expect(await screen(ui)).toContain('<Back Room> (H)it, (C)ollect, (A)lias, (Q)uit')
+    await press(ui, ['c'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/backroom`, body: { password: 'quiet kernel', op: 'collect' } })
+    await press(ui, ['h', ...'Razor', 'return', ...'2500', 'return'])
+    expect(last()).toMatchObject({ url: `${API}/v1/door/backroom`, body: { password: 'quiet kernel', op: 'hit', target: 'Razor', amount: 2500 } })
     await ui.unmount()
   })
 })
