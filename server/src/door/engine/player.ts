@@ -1,16 +1,30 @@
 // Characters: creation, experience and ranks, net worth, the snapshot.
 
 import { SHIPS, START_SHIP, rankOf, rankTitle, shipCost, type DoorConfig } from '../../../../plugin/shared/door/data'
-import type { DoorEvent, Equipment, PlayerSnapshot } from '../../../../plugin/shared/door/protocol'
+import type { DoorEvent, Equipment, PlayerSnapshot, ShipState } from '../../../../plugin/shared/door/protocol'
 import type { PlayerRec } from './types'
 
 export function emptyEquipment(): Equipment {
   return { contactMines: 0, limpets: 0, beacons: 0, seeds: 0, crackers: 0, deadman: 0, cloaks: 0, probes: 0, disruptors: 0, photons: 0, scanner: 'none', planetScanner: false, lens: false, jump: 0 }
 }
 
+/** The Freetrader a character starts with (and gets back after a day out). */
+export function startingShip(shipName: string, config: DoorConfig): ShipState {
+  const spec = SHIPS[START_SHIP]
+  return {
+    type: START_SHIP,
+    name: shipName,
+    holds: Math.min(spec.maxHolds, config.startHolds),
+    cargo: [0, 0, 0],
+    colonists: 0,
+    fighters: Math.min(spec.maxFighters, config.startFighters),
+    shields: 0,
+    equipment: emptyEquipment(),
+  }
+}
+
 /** A new trader in sector 1: a Freetrader, starting credits, holds and fighters, full turns. */
 export function newPlayer(id: number, name: string, shipName: string, config: DoorConfig, now: number): PlayerRec {
-  const spec = SHIPS[START_SHIP]
   return {
     id,
     name,
@@ -24,16 +38,7 @@ export function newPlayer(id: number, name: string, shipName: string, config: Do
     align: 0,
     timesBlownUp: 0,
     commissioned: false,
-    ship: {
-      type: START_SHIP,
-      name: shipName,
-      holds: Math.min(spec.maxHolds, config.startHolds),
-      cargo: [0, 0, 0],
-      colonists: 0,
-      fighters: Math.min(spec.maxFighters, config.startFighters),
-      shields: 0,
-      equipment: emptyEquipment(),
-    },
+    ship: startingShip(shipName, config),
     avoids: [],
     lastSeenLog: 0,
     actions: 0,
@@ -58,8 +63,8 @@ export function netWorth(p: Pick<PlayerRec, 'credits' | 'bank' | 'ship'>): numbe
   return p.credits + p.bank + shipCost(SHIPS[p.ship.type] ?? SHIPS[START_SHIP])
 }
 
-export function toSnapshot(p: PlayerRec, season: string, config: DoorConfig, requestsToday: number): PlayerSnapshot {
-  return {
+export function toSnapshot(p: PlayerRec, season: string, config: DoorConfig, requestsToday: number, blocked = false): PlayerSnapshot {
+  const snap: PlayerSnapshot = {
     v: 1,
     season,
     id: p.id,
@@ -78,5 +83,9 @@ export function toSnapshot(p: PlayerRec, season: string, config: DoorConfig, req
     avoids: p.avoids,
     lastSeenLog: p.lastSeenLog,
     requestsToday,
+    limpet: !!p.limpet,
+    blocked,
   }
+  if (p.deadUntil) snap.deadUntil = new Date(p.deadUntil).toISOString()
+  return snap
 }

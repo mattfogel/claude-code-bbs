@@ -62,7 +62,7 @@ export function itemCount(e: Equipment, id: ItemId): number {
   }
 }
 
-/** Phase 1 sells probes, scanners and the Haggle Lens. */
+/** Buys an Outfitter item. `phase` is the newest build phase: 1 sells probes, scanners and the Haggle Lens; 2 adds beacons, mines, Deadman Charges and disruptors. */
 export function buyItem(p: PlayerRec, id: ItemId, qty: number, phase = 1): Outcome {
   const item = ITEM_BY_ID[id]
   if (!item) return no('We don\'t stock that.')
@@ -81,6 +81,18 @@ export function buyItem(p: PlayerRec, id: ItemId, qty: number, phase = 1): Outco
   else if (id === 'density') e.scanner = 'density'
   else if (id === 'holo') e.scanner = 'holo'
   else if (id === 'lens') e.lens = true
+  else if (id === 'beacon') e.beacons += qty
+  else if (id === 'deadman') e.deadman += qty
+  else if (id === 'contact') e.contactMines += qty
+  else if (id === 'limpet') e.limpets += qty
+  else if (id === 'disruptor') e.disruptors += qty
+  else if (id === 'cracker') e.crackers += qty
+  else if (id === 'seed') e.seeds += qty
+  else if (id === 'cloak') e.cloaks += qty
+  else if (id === 'photon') e.photons += qty
+  else if (id === 'planetScanner') e.planetScanner = true
+  else if (id === 'jump1') e.jump = 1
+  else if (id === 'jump2') e.jump = 2
   return { ok: true, events: [{ kind: 'bought', what: item.name, qty, cost }] }
 }
 

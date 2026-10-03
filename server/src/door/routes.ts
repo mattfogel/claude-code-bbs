@@ -5,7 +5,8 @@
 import type { Context, Hono } from 'hono'
 
 import { stripPipe, sanitizeUserText } from '../../../plugin/shared/pipe'
-import { DOOR_COMMAND_PHASE, DOOR_LIMITS, SEASON_RE, isDoorCommand } from '../../../plugin/shared/door/protocol'
+import { MARSHALS } from '../../../plugin/shared/door/data'
+import { DOOR_BUILT_PHASE, DOOR_COMMAND_PHASE, DOOR_LIMITS, SEASON_RE, isDoorCommand } from '../../../plugin/shared/door/protocol'
 import { LIMITS, type ApiError, type ErrorCode } from '../../../plugin/shared/protocol'
 import type { Env, UserRow } from '../env'
 import type { DoorUser } from './universe'
@@ -29,6 +30,10 @@ export function currentSeason(env: Env): string {
 export const universe = (env: Env, season: string) => env.UNIVERSE.get(env.UNIVERSE.idFromName(season))
 
 const shipName = (raw: unknown) => stripPipe(sanitizeUserText(typeof raw === 'string' ? raw : '', DOOR_LIMITS.shipName))
+/** A name or password typed by a player: no pipe codes, trimmed, capped. */
+const word = (raw: unknown, max: number) => stripPipe(sanitizeUserText(typeof raw === 'string' ? raw : '', max))
+/** The longest thing a player can attack by name: a Marshal. */
+const MARSHAL_NAME_MAX = Math.max(LIMITS.handleMax, ...MARSHALS.map(m => m.name.length))
 const isError = (r: unknown): r is ApiError => !!r && typeof r === 'object' && 'error' in r
 
 export function mountDoor(app: Hono<App>, h: DoorHelpers) {
@@ -41,7 +46,7 @@ export function mountDoor(app: Hono<App>, h: DoorHelpers) {
   app.post('/v1/door/:command', async c => {
     const cmd = c.req.param('command')
     if (!isDoorCommand(cmd)) return h.fail(c, 'not_found', 'No such door command.')
-    if (DOOR_COMMAND_PHASE[cmd] > 1) return h.fail(c, 'invalid', 'Not yet.')
+    if (DOOR_COMMAND_PHASE[cmd] > DOOR_BUILT_PHASE) return h.fail(c, 'invalid', 'Not yet.')
     const req = await h.body<Record<string, unknown>>(c)
     if (!req) return h.fail(c, 'invalid', 'Expected a JSON object.')
     // User text: sanitized here, never trusted from the client.
@@ -58,7 +63,26 @@ export function mountDoor(app: Hono<App>, h: DoorHelpers) {
       if (blocked) return blocked
       req.text = sanitizeUserText(typeof req.text === 'string' ? req.text : '', DOOR_LIMITS.announce)
     } else if (cmd === 'bank' && req.op === 'transfer') {
-      req.to = typeof req.to === 'string' ? req.to.trim().slice(0, LIMITS.handleMax) : ''
+      req.to = word(req.to, LIMITS.handleMax)
+    } else if (cmd === 'beacon') {
+      const blocked = h.writeBlock(c)
+      if (blocked) return blocked
+      req.text = sanitizeUserText(typeof req.text === 'string' ? req.text : '', DOOR_LIMITS.beacon)
+    } else if (cmd === 'attack') {
+      // Long enough for the Marshals' names ("High Marshal Teague") and `*fighters`.
+      req.target = word(req.target, MARSHAL_NAME_MAX)
+    } else if (cmd === 'sal') {
+      req.target = word(req.target, LIMITS.handleMax)
+    } else if (cmd === 'marshal') {
+      if (req.op === 'reward') req.target = word(req.target, LIMITS.handleMax)
+    } else if (cmd === 'backroom') {
+      req.password = word(req.password, 40)
+      if (req.op === 'hit') req.target = word(req.target, LIMITS.handleMax)
+      if (req.op === 'alias') {
+        const blocked = muted(c)
+        if (blocked) return blocked
+        req.alias = word(req.alias, DOOR_LIMITS.alias)
+      }
     }
     return send(c, await universe(c.env, currentSeason(c.env)).command(doorUser(c), cmd, req))
   })

@@ -297,6 +297,13 @@ Decisions for the Conflict build, on top of the rules above. The wire types are 
 ### Extern (lazy, first request after 00:00 UTC)
 Clears fighters, mines and beacons from the space lanes and Concord Space, and takes `COMBAT.navhazDecay` points off every sector's NavHaz.
 
+### As built
+- **Bounties** are claimable once the target's ship is destroyed by you, so a pod escape counts (research says the pod must die too; tighten later if wanted).
+- **Marshal punishment** is a flat −10% experience and a pod, and the **turncoat rule** destroys the ship outright (50,000 damage would not kill a loaded Cruiser, so `COMBAT.turncoatDamage` is unused).
+- **Offensive fighters** that fail to kill lose everything they sent; only the unsent part holds the sector.
+- Fatal deaths park the player in sector 0 until respawn (ship "Second Wind"). A wrong Back Room password is a normal reply with strike prose. Attack targets are capped at 19 characters so Marshal names fit; aliases cannot take a Marshal's name or start with `*`.
+- The client refuses locally what it can know (deploys in Concord Space, the Marshal's Office and Back Room alignment gates, reward and hit minimums); the server enforces all of it, including the space lanes.
+
 ### Not in this phase
 Capture, ships you own but do not fly, towing, photon missiles, cloaks and corporate deployments (`owner: 'corp'` is refused until corps exist), and the Hallucinations' use of `surrender`.
 
