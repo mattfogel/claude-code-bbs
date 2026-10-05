@@ -239,7 +239,7 @@ Formulas and tables come from the research. `data.ts` holds every constant. "Res
 
 ## Screens (client/door)
 
-- **Title:** original block-letter art for the title, a starfield, and `[E]nter the lanes  [I]nstructions  [L]og (today)  [R]ankings  [Q]uit`. It is reached from the main menu's new `[D]oors` entry, which lists doors with HYPERPLANE first.
+- **Title:** original block-letter art for the title, a starfield, and `[E]nter the lanes  [I]nstructions  [L]og (today)  [R]ankings  [Q]uit`. It is reached from the main menu's new `[G]ames` entry, which lists doors with HYPERPLANE first.
 - **New character:** ship name (30 characters). The trader name is the BBS handle.
 - **Main view:** the transcript scrolls. The bottom three rows are the prompt `Command [T=187]:[3554] (?=Help)? :`, a quick-stats bar (`Sect 3554│Turns 187│Creds 2,412│Figs 30│Shlds 0│Hlds 20│Ore 0│Org 20│Equ 0`) and the BBS status bar. Colors follow the TW convention: green labels, cyan data, yellow numbers, red for danger and unknown.
 - **Sub-prompts:** the computer, a port dock, the Drydock and each of its venues, a planet, a citadel and the corp menu each have their own prompt line and keymap, like the original.

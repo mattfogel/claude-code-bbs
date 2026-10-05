@@ -61,7 +61,7 @@ export const MATRIX: Item[] = [
   { key: 'w', label: "Who's On" },
 ]
 
-/** The main menu: two panels of five, then Doors and Goodbye on the bottom row. */
+/** The main menu: two panels of five, then Games and Goodbye on the bottom row. */
 export const MAIN: (Item & { screen: Screen })[] = [
   { key: 'm', label: 'Messages', screen: 'threads' },
   { key: 'n', label: 'Newscan', screen: 'newscan' },
@@ -73,8 +73,8 @@ export const MAIN: (Item & { screen: Screen })[] = [
   { key: 'l', label: 'Last Callers', screen: 'callers' },
   { key: 'w', label: "Who's Online", screen: 'who' },
   { key: 's', label: 'Stats', screen: 'stats' },
-  { key: 'd', label: 'Doors', screen: 'doors' },
-  { key: 'g', label: 'Goodbye', screen: 'goodbye' },
+  { key: 'g', label: 'Games', screen: 'doors' },
+  { key: 'x', label: 'Goodbye', screen: 'goodbye' },
 ]
 const PANEL = 5
 const DOORS_ITEM = PANEL * 2
@@ -191,10 +191,10 @@ function enterMain(s: AppState, index: number, view: View): Step {
   return { state: next }
 }
 
-/** Lightbar moves on the main menu: down a panel, across panels, Doors and Goodbye below them. */
+/** Lightbar moves on the main menu: down a panel, across panels, Games and Goodbye below them. */
 function moveMain(sel: number, key: ClientKey): number {
   const bottom = sel >= DOORS_ITEM
-  // The bottom row sits under the panels: Doors under the left, Goodbye under the right.
+  // The bottom row sits under the panels: Games under the left, Goodbye under the right.
   const col = bottom ? sel - DOORS_ITEM : Math.floor(sel / PANEL)
   const row = sel % PANEL
   switch (key.key) {
@@ -317,7 +317,7 @@ const MENU_NAMES: Partial<Record<Screen, string>> = {
   callers: 'Callers', who: "Who's On", stats: 'Stats', bases: 'Bases', editor: 'Editor', newscan: 'Newscan',
   vote: 'Voting', poll: 'Voting', top: 'Top Ten', goodbye: 'Goodbye',
   sysop: 'Sysop', sysConfs: 'Sysop', sysPolls: 'Sysop', sysForm: 'Sysop',
-  doors: 'Doors', door: 'HYPERPLANE',
+  doors: 'Games', door: 'HYPERPLANE',
 }
 
 function menuName(state: AppState, base: string | undefined): string {

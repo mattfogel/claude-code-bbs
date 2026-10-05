@@ -233,7 +233,7 @@ describe('HYPERPLANE', () => {
     await $.command.run({ command: 'bbs', args: '', origin: { kind: 'composer' } } as never)
     const ui = (await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })) as unknown as Ui
 
-    await press(ui, ['l', 'x', 'd'])
+    await press(ui, ['l', 'x', 'g'])
     expect(await screen(ui)).toContain('HYPERPLANE')
     await press(ui, ['1'])
     expect(await screen(ui)).toContain('[E]nter the lanes')
@@ -304,7 +304,7 @@ describe('HYPERPLANE', () => {
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
     await $.command.run({ command: 'bbs', args: '', origin: { kind: 'composer' } } as never)
     const ui = (await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })) as unknown as Ui
-    await press(ui, ['l', 'x', 'd', '1', 'e'])
+    await press(ui, ['l', 'x', 'g', '1', 'e'])
     expect(await screen(ui)).toContain('The lanes are dark. No Epoch has begun.')
     expect(await screen(ui)).toContain('[E]nter the lanes')
     await ui.unmount()
@@ -316,7 +316,7 @@ describe('HYPERPLANE', () => {
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
     await $.command.run({ command: 'bbs', args: '', origin: { kind: 'composer' } } as never)
     const ui = (await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })) as unknown as Ui
-    await press(ui, ['l', 'x', 'd', '1', 'l'])
+    await press(ui, ['l', 'x', 'g', '1', 'l'])
     for (let i = 0; i < 5 && !(await screen(ui)).includes('Big Bang'); i++) await ui.advance(20)
     expect(await screen(ui)).toContain('The Big Bang! Epoch 1 begins.')
     await press(ui, ['x', 'r'])
@@ -332,7 +332,7 @@ describe('HYPERPLANE', () => {
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
     await $.command.run({ command: 'bbs', args: '', origin: { kind: 'composer' } } as never)
     const ui = (await $.ui.mount({ plugin: PANE, surface: 'terminal', component: 'Pane', props: paneProps(), requestId: PANE })) as unknown as Ui
-    await press(ui, ['l', 'x', 'd', '1', 'e', ...'Nightjar', 'return'])
+    await press(ui, ['l', 'x', 'g', '1', 'e', ...'Nightjar', 'return'])
     const last = () => doorCalls(d).at(-1)
 
     // Next door: one trader. Fighters deployed in Toll mode, then some taken back.

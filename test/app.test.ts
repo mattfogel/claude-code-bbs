@@ -137,7 +137,7 @@ describe('press', () => {
   })
 
   it('says goodbye and hangs up back to the matrix', () => {
-    const { state, actions } = run(initialState(), ['l', 'x', 'g'], member)
+    const { state, actions } = run(initialState(), ['l', 'x', 'x'], member)
     expect(actions.at(-1)).toEqual({ type: 'logoff' })
     expect(text(draw(state, member, 80, 24, NOW))).toContain('NO CARRIER')
     expect(run(state, ['x'], member).state.screen).toBe('matrix')
