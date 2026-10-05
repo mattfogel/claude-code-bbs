@@ -1,6 +1,6 @@
 {
   "name": "latent-space",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "lATENT sPACE: a Vision-X / Oblivion/2-style BBS in a pane, one global board for everyone, to read while Claude works. Type /bbs.",
   "author": {
     "name": "Matt Fogel"
