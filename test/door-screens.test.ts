@@ -208,7 +208,7 @@ const inGame = (): AppState => ({ ...initialState(), screen: 'door', onBoard: tr
 describe('door screens', () => {
   it('reaches HYPERPLANE from the main menu and enters with one action', () => {
     let { state } = run(initialState(), ['l', 'x'], base)
-    state = run(state, ['d'], base).state
+    state = run(state, ['g'], base).state
     expect(state.screen).toBe('doors')
     expect(screen(state, base)).toContain('HYPERPLANE')
     state = run(state, ['1'], base).state
@@ -221,13 +221,13 @@ describe('door screens', () => {
     expect(out.state.screen).toBe('main')
   })
 
-  it('keeps the main menu lightbar moving onto Doors and Goodbye', () => {
+  it('keeps the main menu lightbar moving onto Games and Goodbye', () => {
     let { state } = run(initialState(), ['l', 'x'], base)
     state = { ...state, sel: 9 }
     expect(run(state, ['down'], base).state.sel).toBe(11)
     expect(run({ ...state, sel: 10 }, ['right'], base).state.sel).toBe(11)
     expect(run({ ...state, sel: 11 }, ['up'], base).state.sel).toBe(9)
-    expect(screen(state, base)).toMatch(/Doors\s+.*Goodbye/)
+    expect(screen(state, base)).toMatch(/Games\s+.*Goodbye/)
   })
 
   it('names a new character', () => {

@@ -23,7 +23,7 @@ export const DOOR_SCREENS = ['doors', 'door'] as const
 export type DoorScreen = (typeof DOOR_SCREENS)[number]
 export const isDoorScreen = (s: Screen): s is DoorScreen => (DOOR_SCREENS as readonly string[]).includes(s)
 
-/** The doors on the Doors menu. */
+/** The doors on the Games menu. */
 export const DOORS = [{ key: '1', title: GAME.title, blurb: 'Trade, haggle and explore across a thousand sectors.' }]
 
 export type DoorPage = 'title' | 'instructions' | 'log' | 'rankings' | 'game'
@@ -841,9 +841,9 @@ function pressDrydock(x: X, venue: Venue, sh: Shown, k: string, echo: string, ke
 export function drawDoor(s: AppState, view: View, w: number, h: number, now: number): string[] {
   const dv = doorView(view)
   if (s.screen === 'doors') {
-    const lines = [...header('Doors', w)]
+    const lines = [...header('Games', w)]
     DOORS.forEach((d, i) => lines.push(`${i === 0 ? LIGHTBAR : '|07'} ${d.key} |16 |11${d.title.padEnd(12)} |07${d.blurb}`))
-    lines.push('', '|08Doors are games that run beside the board. Your progress is kept on the server.')
+    lines.push('', '|08Games are BBS doors that run beside the board. Your progress is kept on the server.')
     return [...pad(lines, h - 1).slice(0, h - 1), footer('|08[|151|08]|07 Play  |08[|15Q|08]|07uit', w)]
   }
   const d = s.door ?? initialDoor()
